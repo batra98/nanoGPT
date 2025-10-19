@@ -287,9 +287,18 @@ while True:
                 print(f"💾 Saving checkpoint (best val loss: {best_val_loss:.4f})")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
         
-        # Check if early stopping triggered
-        if early_stopping_triggered:
-            break
+    # Broadcast early stopping to all DDP ranks (must happen outside master_process check)
+    if ddp:
+        import torch.distributed as dist
+        # Create a tensor to broadcast (1 if triggered, 0 otherwise)
+        stop_tensor = torch.tensor([1 if early_stopping_triggered else 0], dtype=torch.long, device=device)
+        dist.broadcast(stop_tensor, src=0)  # Broadcast from rank 0 to all
+        if stop_tensor.item() == 1:
+            early_stopping_triggered = True
+    
+    # Now all ranks check the same flag
+    if early_stopping_triggered:
+        break
     
     if iter_num == 0 and eval_only:
         break
