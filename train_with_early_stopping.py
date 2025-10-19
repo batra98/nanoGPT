@@ -349,18 +349,22 @@ if master_process:
         print(f"Completed all {max_iters} iterations")
     print(f"{'='*60}\n")
     
-    # Save final checkpoint (ensures we always have a checkpoint for evaluation)
-    print(f"Saving final checkpoint to {out_dir}")
-    checkpoint = {
-        'model': raw_model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'model_args': model_args,
-        'iter_num': iter_num,
-        'best_val_loss': best_val_loss,
-        'config': config,
-    }
-    torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-    print("Final checkpoint saved ✓")
+    # Only save final checkpoint if none exists yet (keeps best checkpoint from training)
+    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+    if not os.path.exists(ckpt_path):
+        print(f"No checkpoint found. Saving final checkpoint to {out_dir}")
+        checkpoint = {
+            'model': raw_model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'model_args': model_args,
+            'iter_num': iter_num,
+            'best_val_loss': best_val_loss,
+            'config': config,
+        }
+        torch.save(checkpoint, ckpt_path)
+        print("Final checkpoint saved ✓")
+    else:
+        print(f"Best checkpoint already exists (val loss: {best_val_loss:.4f}) - not overwriting ✓")
 
 # Ensure clean DDP cleanup - only if process group is initialized
 if ddp:

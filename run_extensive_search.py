@@ -149,7 +149,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run extensive hyperparameter search')
     parser.add_argument('--num_gpus', type=int, default=1,
                         help='Number of GPUs to use per configuration (1 or 8)')
-    parser.add_argument('--num_samples', type=int, default=50,
+    parser.add_argument('--num_samples', type=int, default=5,
                         help='Number of samples to generate for evaluation')
     args = parser.parse_args()
     
@@ -284,11 +284,83 @@ def main():
                     
                     wandb.log(log_dict)
                     
-                    # Upload generated samples as artifact
-                    if os.path.exists(os.path.join(out_dir, 'generated_samples.txt')):
-                        artifact = wandb.Artifact(f'samples-{run_name}', 'generated_text')
-                        artifact.add_file(os.path.join(out_dir, 'generated_samples.txt'))
-                        wandb.log_artifact(artifact)
+                    # Create visualization plots for metrics
+                    import matplotlib.pyplot as plt
+                    import numpy as np
+                    
+                    # Plot 1: Specific metrics (distribution closeness) - lower is better
+                    fig1, ax1 = plt.subplots(figsize=(10, 6))
+                    specific_metrics = {
+                        'Unigram\nOverlap': metrics['ngram_overlap_1'],
+                        'Bigram\nOverlap': metrics['ngram_overlap_2'],
+                        'Trigram\nOverlap': metrics['ngram_overlap_3'],
+                        'Perplexity': metrics['perplexity'],
+                        'KL Div': metrics['kl_divergence']
+                    }
+                    bars1 = ax1.bar(specific_metrics.keys(), specific_metrics.values(), color=['#2E86AB', '#2E86AB', '#2E86AB', '#A23B72', '#F18F01'])
+                    ax1.set_title(f'Specific Metrics: Distribution Closeness\n{run_name}', fontsize=14, fontweight='bold')
+                    ax1.set_ylabel('Score', fontsize=12)
+                    ax1.grid(axis='y', alpha=0.3)
+                    for bar in bars1:
+                        height = bar.get_height()
+                        ax1.text(bar.get_x() + bar.get_width()/2., height,
+                                f'{height:.3f}', ha='center', va='bottom', fontsize=10)
+                    plt.tight_layout()
+                    wandb.log({"plots/specific_metrics": wandb.Image(fig1)})
+                    plt.close(fig1)
+                    
+                    # Plot 2: General metrics (quality/diversity) - higher is better (except self-BLEU)
+                    fig2, ax2 = plt.subplots(figsize=(10, 6))
+                    general_metrics = {
+                        'Self-BLEU\n(lower=diverse)': metrics['self_bleu'],
+                        'Distinct-1': metrics['distinct_1'],
+                        'Distinct-2': metrics['distinct_2'],
+                        'Distinct-3': metrics['distinct_3'],
+                        'Entropy': metrics['entropy']
+                    }
+                    bars2 = ax2.bar(general_metrics.keys(), general_metrics.values(), color=['#A23B72', '#06A77D', '#06A77D', '#06A77D', '#F18F01'])
+                    ax2.set_title(f'General Metrics: Quality & Diversity\n{run_name}', fontsize=14, fontweight='bold')
+                    ax2.set_ylabel('Score', fontsize=12)
+                    ax2.grid(axis='y', alpha=0.3)
+                    for bar in bars2:
+                        height = bar.get_height()
+                        ax2.text(bar.get_x() + bar.get_width()/2., height,
+                                f'{height:.3f}', ha='center', va='bottom', fontsize=10)
+                    plt.tight_layout()
+                    wandb.log({"plots/general_metrics": wandb.Image(fig2)})
+                    plt.close(fig2)
+                    
+                    # Plot 3: Combined summary with normalized scores
+                    fig3, (ax3a, ax3b) = plt.subplots(1, 2, figsize=(14, 6))
+                    
+                    # N-gram overlap progression
+                    ngram_data = [metrics['ngram_overlap_1'], metrics['ngram_overlap_2'], metrics['ngram_overlap_3']]
+                    ax3a.plot([1, 2, 3], ngram_data, marker='o', linewidth=2, markersize=8, color='#2E86AB')
+                    ax3a.fill_between([1, 2, 3], ngram_data, alpha=0.3, color='#2E86AB')
+                    ax3a.set_xlabel('N-gram Size', fontsize=12)
+                    ax3a.set_ylabel('Overlap %', fontsize=12)
+                    ax3a.set_title('N-gram Overlap Progression', fontsize=12, fontweight='bold')
+                    ax3a.set_xticks([1, 2, 3])
+                    ax3a.grid(True, alpha=0.3)
+                    for i, val in enumerate(ngram_data, 1):
+                        ax3a.text(i, val, f'{val:.2f}%', ha='center', va='bottom')
+                    
+                    # Distinct-n progression
+                    distinct_data = [metrics['distinct_1'], metrics['distinct_2'], metrics['distinct_3']]
+                    ax3b.plot([1, 2, 3], distinct_data, marker='s', linewidth=2, markersize=8, color='#06A77D')
+                    ax3b.fill_between([1, 2, 3], distinct_data, alpha=0.3, color='#06A77D')
+                    ax3b.set_xlabel('N-gram Size', fontsize=12)
+                    ax3b.set_ylabel('Distinct Ratio', fontsize=12)
+                    ax3b.set_title('Distinct-N Diversity', fontsize=12, fontweight='bold')
+                    ax3b.set_xticks([1, 2, 3])
+                    ax3b.grid(True, alpha=0.3)
+                    for i, val in enumerate(distinct_data, 1):
+                        ax3b.text(i, val, f'{val:.3f}', ha='center', va='bottom')
+                    
+                    plt.suptitle(f'Metric Progressions: {run_name}', fontsize=14, fontweight='bold', y=1.02)
+                    plt.tight_layout()
+                    wandb.log({"plots/metric_progressions": wandb.Image(fig3)})
+                    plt.close(fig3)
                     
                     wandb.finish()
                 except Exception as wandb_error:
