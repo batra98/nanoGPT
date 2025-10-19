@@ -349,9 +349,14 @@ if master_process:
         print(f"Completed all {max_iters} iterations")
     print(f"{'='*60}\n")
 
-# Ensure clean DDP cleanup
+# Ensure clean DDP cleanup - only if process group is initialized
 if ddp:
-    destroy_process_group()
+    try:
+        import torch.distributed as dist
+        if dist.is_initialized():
+            destroy_process_group()
+    except:
+        pass  # Process group already destroyed or never initialized
 
 # Normal exit - let torchrun handle the rest
 
