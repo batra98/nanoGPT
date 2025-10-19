@@ -11,7 +11,7 @@ always_save_checkpoint = False
 
 # WandB logging - will be configured by orchestration script
 wandb_log = True
-wandb_project = 'shakespeare-hyperparam-search'
+wandb_project = 'shakespeare-extensive-search'  # Must match orchestration script project
 wandb_run_name = 'baseline'  # Will be overridden
 
 # Dataset
