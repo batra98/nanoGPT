@@ -151,8 +151,6 @@ def main():
                         help='Number of GPUs to use per configuration (1 or 8)')
     parser.add_argument('--num_samples', type=int, default=50,
                         help='Number of samples to generate for evaluation')
-    parser.add_argument('--skip_eval', action='store_true',
-                        help='Skip evaluation phase (sample generation and metrics)')
     args = parser.parse_args()
     
     num_gpus = args.num_gpus
@@ -215,18 +213,14 @@ def main():
                 torch.cuda.synchronize()
                 time.sleep(1)
             
-            # Optionally evaluate on single GPU
-            if args.skip_eval:
-                print("Skipping evaluation (--skip_eval enabled)")
-                metrics = {}  # Empty metrics dict
-            else:
-                print("Starting evaluation...")
-                eval_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-                try:
-                    metrics = evaluate_model(out_dir, args.num_samples, 500, eval_device, True)
-                except Exception as eval_error:
-                    print(f"Evaluation failed: {eval_error}")
-                    raise
+            # Always evaluate on single GPU
+            print("Starting evaluation...")
+            eval_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+            try:
+                metrics = evaluate_model(out_dir, args.num_samples, 500, eval_device, True)
+            except Exception as eval_error:
+                print(f"Evaluation failed: {eval_error}")
+                raise
             
             # Load checkpoint to get losses and iteration count
             ckpt_path = os.path.join(out_dir, 'ckpt.pt')
@@ -256,35 +250,46 @@ def main():
             }
             all_results.append(result)
             
-            # Log to WandB (with error handling)
-            if WANDB_AVAILABLE and not args.skip_eval:
+            # Always log to WandB
+            if WANDB_AVAILABLE:
                 try:
                     run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
                     run = wandb.init(project='shakespeare-extensive-search', name=run_name, id=run_name, resume='allow')
                     
-                    # Log config and metrics (if available)
+                    # Log everything: config, training, and evaluation metrics
                     log_dict = {
-                        'config/n_layer': n_layer, 'config/n_head': n_head, 'config/n_embd': n_embd,
-                        'config/total_params': result['total_params'], 'config/training_time_min': training_time,
+                        # Config
+                        'config/n_layer': n_layer,
+                        'config/n_head': n_head,
+                        'config/n_embd': n_embd,
+                        'config/total_params': result['total_params'],
+                        'config/training_time_min': training_time,
                         'config/final_iteration': final_iter,
+                        
+                        # Training metrics
+                        'train/final_val_loss': val_loss,
+                        
+                        # Evaluation metrics (always available)
+                        'eval/ngram_overlap_1': metrics['ngram_overlap_1'],
+                        'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
+                        'eval/ngram_overlap_3': metrics['ngram_overlap_3'],
+                        'eval/perplexity': metrics['perplexity'],
+                        'eval/kl_divergence': metrics['kl_divergence'],
+                        'eval/self_bleu': metrics['self_bleu'],
+                        'eval/distinct_1': metrics['distinct_1'],
+                        'eval/distinct_2': metrics['distinct_2'],
+                        'eval/distinct_3': metrics['distinct_3'],
+                        'eval/entropy': metrics['entropy'],
                     }
-                    
-                    # Add evaluation metrics if they exist
-                    if metrics:
-                        log_dict.update({
-                            'eval/ngram_overlap_1': metrics['ngram_overlap_1'], 'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
-                            'eval/ngram_overlap_3': metrics['ngram_overlap_3'], 'eval/perplexity': metrics['perplexity'],
-                            'eval/kl_divergence': metrics['kl_divergence'], 'eval/self_bleu': metrics['self_bleu'],
-                            'eval/distinct_1': metrics['distinct_1'], 'eval/distinct_2': metrics['distinct_2'],
-                            'eval/distinct_3': metrics['distinct_3'], 'eval/entropy': metrics['entropy'],
-                        })
                     
                     wandb.log(log_dict)
                     
+                    # Upload generated samples as artifact
                     if os.path.exists(os.path.join(out_dir, 'generated_samples.txt')):
                         artifact = wandb.Artifact(f'samples-{run_name}', 'generated_text')
                         artifact.add_file(os.path.join(out_dir, 'generated_samples.txt'))
                         wandb.log_artifact(artifact)
+                    
                     wandb.finish()
                 except Exception as wandb_error:
                     print(f"WandB logging failed: {wandb_error}")

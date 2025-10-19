@@ -332,6 +332,9 @@ while True:
 
 if ddp:
     destroy_process_group()
+    # Give processes time to clean up
+    import time
+    time.sleep(2)
 
 # Final summary
 if master_process:
@@ -346,7 +349,20 @@ if master_process:
         print(f"Completed all {max_iters} iterations")
     print(f"{'='*60}\n")
 
-# Ensure clean exit
+# Ensure clean exit - kill all child processes if DDP
+if ddp and master_process:
+    import os
+    import signal
+    import subprocess
+    try:
+        # Kill all processes in the same process group
+        pgid = os.getpgid(os.getpid())
+        print(f"Cleaning up process group {pgid}")
+        os.killpg(pgid, signal.SIGTERM)
+    except:
+        pass
+
+# Force exit
 import sys
 sys.exit(0)
 
