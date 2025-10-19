@@ -368,6 +368,14 @@ if master_process:
     else:
         print(f"Best checkpoint already exists (val loss: {best_val_loss:.4f}) - not overwriting ✓")
 
+# Close WandB run before exiting
+if wandb_log and master_process:
+    print("Finishing WandB run...")
+    try:
+        wandb.finish()
+    except:
+        pass
+
 # Ensure clean DDP cleanup - only if process group is initialized
 if ddp:
     try:
