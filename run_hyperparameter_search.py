@@ -91,9 +91,9 @@ def train_configuration(
     Returns:
         Tuple of (out_dir, training_time, metrics_dict)
     """
-    # Create run name
+    # Create run name and output directory in /nobackup
     run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
-    out_dir = f"out-shakespeare-hyperparam-L{n_layer}-H{n_head}-E{n_embd}"
+    out_dir = f"/nobackup/gaurav/out-shakespeare-hyperparam-L{n_layer}-H{n_head}-E{n_embd}"
     
     # Count parameters
     total_params = count_parameters(n_layer, n_head, n_embd)
