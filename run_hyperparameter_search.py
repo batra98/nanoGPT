@@ -14,6 +14,13 @@ import torch
 
 from sample_and_evaluate import evaluate_model
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not installed. Metrics will not be logged to WandB.")
+
 
 # Configuration space: (n_layer, n_head, n_embd, description)
 CONFIGURATIONS = [
@@ -251,6 +258,59 @@ def main():
             }
             all_results.append(result)
             
+            # Log evaluation metrics to WandB
+            if WANDB_AVAILABLE:
+                run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
+                try:
+                    # Resume the run that was created during training
+                    run = wandb.init(
+                        project='shakespeare-hyperparam-search',
+                        name=run_name,
+                        id=run_name,  # Use same ID to resume
+                        resume='allow'
+                    )
+                    
+                    # Log all evaluation metrics
+                    wandb.log({
+                        # Model configuration
+                        'config/n_layer': n_layer,
+                        'config/n_head': n_head,
+                        'config/n_embd': n_embd,
+                        'config/total_params': result['total_params'],
+                        'config/training_time_min': training_time,
+                        
+                        # Specific metrics (training data comparison)
+                        'eval/ngram_overlap_1': metrics['ngram_overlap_1'],
+                        'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
+                        'eval/ngram_overlap_3': metrics['ngram_overlap_3'],
+                        'eval/perplexity': metrics['perplexity'],
+                        'eval/kl_divergence': metrics['kl_divergence'],
+                        
+                        # General metrics (diversity)
+                        'eval/self_bleu': metrics['self_bleu'],
+                        'eval/distinct_1': metrics['distinct_1'],
+                        'eval/distinct_2': metrics['distinct_2'],
+                        'eval/distinct_3': metrics['distinct_3'],
+                        'eval/entropy': metrics['entropy'],
+                    })
+                    
+                    # Log sample text as artifact
+                    samples_path = os.path.join(out_dir, 'generated_samples.txt')
+                    if os.path.exists(samples_path):
+                        artifact = wandb.Artifact(
+                            name=f'samples-{run_name}',
+                            type='generated_text',
+                            description=f'Generated samples from {run_name}'
+                        )
+                        artifact.add_file(samples_path)
+                        wandb.log_artifact(artifact)
+                    
+                    wandb.finish()
+                    print(f"✓ Metrics logged to WandB for {run_name}")
+                    
+                except Exception as e:
+                    print(f"Warning: Failed to log metrics to WandB: {e}")
+            
             print(f"\n✓ Configuration {i}/{len(CONFIGURATIONS)} complete!")
             
         except Exception as e:
@@ -306,6 +366,65 @@ def main():
             print(f"  Val Loss:    {best_result['val_loss']:.4f}")
             print(f"  Perplexity:  {best_result['perplexity']:.4f}")
             print("="*80 + "\n")
+    
+    # Create a summary run in WandB with comparison table
+    if WANDB_AVAILABLE and all_results:
+        try:
+            summary_run = wandb.init(
+                project='shakespeare-hyperparam-search',
+                name='00-summary-comparison',
+                job_type='summary'
+            )
+            
+            # Create comparison table
+            table_data = []
+            for result in all_results:
+                table_data.append([
+                    result['config_name'],
+                    result['n_layer'],
+                    result['n_head'],
+                    result['n_embd'],
+                    result['total_params'],
+                    result.get('val_loss', 'N/A'),
+                    result.get('perplexity', 'N/A'),
+                    result.get('ngram_overlap_1', 'N/A'),
+                    result.get('ngram_overlap_2', 'N/A'),
+                    result.get('ngram_overlap_3', 'N/A'),
+                    result.get('kl_divergence', 'N/A'),
+                    result.get('self_bleu', 'N/A'),
+                    result.get('distinct_1', 'N/A'),
+                    result.get('distinct_2', 'N/A'),
+                    result.get('distinct_3', 'N/A'),
+                    result.get('entropy', 'N/A'),
+                    result['training_time_min'],
+                ])
+            
+            table = wandb.Table(
+                columns=[
+                    'Config', 'Layers', 'Heads', 'Embd', 'Params',
+                    'Val Loss', 'Perplexity',
+                    'N-gram-1', 'N-gram-2', 'N-gram-3', 'KL Div',
+                    'Self-BLEU', 'Distinct-1', 'Distinct-2', 'Distinct-3', 'Entropy',
+                    'Time (min)'
+                ],
+                data=table_data
+            )
+            
+            wandb.log({"results_comparison": table})
+            
+            # Log best configuration
+            if valid_results:
+                wandb.log({
+                    "best_config": best_result['config_name'],
+                    "best_val_loss": best_result['val_loss'],
+                    "best_perplexity": best_result['perplexity'],
+                })
+            
+            wandb.finish()
+            print("✓ Summary table logged to WandB")
+            
+        except Exception as e:
+            print(f"Warning: Failed to create WandB summary: {e}")
     
     print("\n" + "="*80)
     print("HYPERPARAMETER SEARCH COMPLETE!")
