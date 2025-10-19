@@ -180,15 +180,24 @@ def main():
                 num_gpus=num_gpus
             )
             
-            # Cleanup and evaluate
+            # Cleanup GPU and wait for processes
             if num_gpus > 1:
-                time.sleep(3)
+                print("Cleaning up DDP processes...")
+                time.sleep(5)  # Increased from 3 to 5 seconds
+            
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+                time.sleep(1)  # Extra wait after sync
             
+            # Evaluate on single GPU
+            print("Starting evaluation...")
             eval_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-            metrics = evaluate_model(out_dir, args.num_samples, 500, eval_device, True)
+            try:
+                metrics = evaluate_model(out_dir, args.num_samples, 500, eval_device, True)
+            except Exception as eval_error:
+                print(f"Evaluation failed: {eval_error}")
+                raise
             
             # Load checkpoint to get losses and iteration count
             ckpt_path = os.path.join(out_dir, 'ckpt.pt')
@@ -218,47 +227,61 @@ def main():
             }
             all_results.append(result)
             
-            # Log to WandB
+            # Log to WandB (with error handling)
             if WANDB_AVAILABLE:
-                run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
-                run = wandb.init(project='shakespeare-extensive-search', name=run_name, id=run_name, resume='allow')
-                wandb.log({
-                    'config/n_layer': n_layer, 'config/n_head': n_head, 'config/n_embd': n_embd,
-                    'config/total_params': result['total_params'], 'config/training_time_min': training_time,
-                    'config/final_iteration': final_iter,
-                    'eval/ngram_overlap_1': metrics['ngram_overlap_1'], 'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
-                    'eval/ngram_overlap_3': metrics['ngram_overlap_3'], 'eval/perplexity': metrics['perplexity'],
-                    'eval/kl_divergence': metrics['kl_divergence'], 'eval/self_bleu': metrics['self_bleu'],
-                    'eval/distinct_1': metrics['distinct_1'], 'eval/distinct_2': metrics['distinct_2'],
-                    'eval/distinct_3': metrics['distinct_3'], 'eval/entropy': metrics['entropy'],
-                })
-                if os.path.exists(os.path.join(out_dir, 'generated_samples.txt')):
-                    artifact = wandb.Artifact(f'samples-{run_name}', 'generated_text')
-                    artifact.add_file(os.path.join(out_dir, 'generated_samples.txt'))
-                    wandb.log_artifact(artifact)
-                wandb.finish()
+                try:
+                    run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
+                    run = wandb.init(project='shakespeare-extensive-search', name=run_name, id=run_name, resume='allow')
+                    wandb.log({
+                        'config/n_layer': n_layer, 'config/n_head': n_head, 'config/n_embd': n_embd,
+                        'config/total_params': result['total_params'], 'config/training_time_min': training_time,
+                        'config/final_iteration': final_iter,
+                        'eval/ngram_overlap_1': metrics['ngram_overlap_1'], 'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
+                        'eval/ngram_overlap_3': metrics['ngram_overlap_3'], 'eval/perplexity': metrics['perplexity'],
+                        'eval/kl_divergence': metrics['kl_divergence'], 'eval/self_bleu': metrics['self_bleu'],
+                        'eval/distinct_1': metrics['distinct_1'], 'eval/distinct_2': metrics['distinct_2'],
+                        'eval/distinct_3': metrics['distinct_3'], 'eval/entropy': metrics['entropy'],
+                    })
+                    if os.path.exists(os.path.join(out_dir, 'generated_samples.txt')):
+                        artifact = wandb.Artifact(f'samples-{run_name}', 'generated_text')
+                        artifact.add_file(os.path.join(out_dir, 'generated_samples.txt'))
+                        wandb.log_artifact(artifact)
+                    wandb.finish()
+                except Exception as wandb_error:
+                    print(f"WandB logging failed: {wandb_error}")
+                    # Continue anyway - don't let WandB issues stop the search
+            
+            print(f"✓ Config {i}/{len(CONFIGURATIONS)} complete")
             
         except Exception as e:
-            print(f"Failed: {e}")
+            print(f"✗ Config {i}/{len(CONFIGURATIONS)} failed: {e}")
+            # Force cleanup before continuing
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            import traceback
+            traceback.print_exc()
             continue
     
-    # WandB summary table
+    # WandB summary table (with error handling)
     if WANDB_AVAILABLE and all_results:
-        valid_results = [r for r in all_results if isinstance(r['val_loss'], float)]
-        best = min(valid_results, key=lambda x: x['val_loss']) if valid_results else None
-        
-        summary_run = wandb.init(project='shakespeare-extensive-search', name='00-summary', job_type='summary')
-        table_data = [[r['config_name'], r['n_layer'], r['n_head'], r['n_embd'], r['total_params'],
-                       r['final_iteration'], r.get('val_loss', 'N/A'), r.get('perplexity', 'N/A'),
-                       r.get('kl_divergence', 'N/A'), r.get('self_bleu', 'N/A'), r['training_time_min']]
-                      for r in all_results]
-        table = wandb.Table(columns=['Config', 'Layers', 'Heads', 'Embd', 'Params', 'Iters',
-                                     'Val Loss', 'Perplexity', 'KL Div', 'Self-BLEU', 'Time'],
-                           data=table_data)
-        wandb.log({"results": table})
-        if best:
-            wandb.log({"best_config": best['config_name'], "best_val_loss": best['val_loss']})
-        wandb.finish()
+        try:
+            valid_results = [r for r in all_results if isinstance(r['val_loss'], float)]
+            best = min(valid_results, key=lambda x: x['val_loss']) if valid_results else None
+            
+            summary_run = wandb.init(project='shakespeare-extensive-search', name='00-summary', job_type='summary')
+            table_data = [[r['config_name'], r['n_layer'], r['n_head'], r['n_embd'], r['total_params'],
+                           r['final_iteration'], r.get('val_loss', 'N/A'), r.get('perplexity', 'N/A'),
+                           r.get('kl_divergence', 'N/A'), r.get('self_bleu', 'N/A'), r['training_time_min']]
+                          for r in all_results]
+            table = wandb.Table(columns=['Config', 'Layers', 'Heads', 'Embd', 'Params', 'Iters',
+                                         'Val Loss', 'Perplexity', 'KL Div', 'Self-BLEU', 'Time'],
+                               data=table_data)
+            wandb.log({"results": table})
+            if best:
+                wandb.log({"best_config": best['config_name'], "best_val_loss": best['val_loss']})
+            wandb.finish()
+        except Exception as summary_error:
+            print(f"Summary table creation failed: {summary_error}")
     
     print(f"\nComplete: {len(all_results)} configs. Check WandB: shakespeare-extensive-search\n")
 
