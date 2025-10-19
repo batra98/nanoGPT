@@ -185,29 +185,10 @@ def main():
                 num_gpus=num_gpus
             )
             
-            # Cleanup GPU and kill any orphaned processes
+            # Cleanup GPU - wait for processes to exit naturally first
             if num_gpus > 1:
-                print("Cleaning up DDP processes...")
-                time.sleep(5)
-                
-                # Force kill any remaining Python processes on GPUs
-                import subprocess as sp
-                try:
-                    # Get list of processes using GPUs
-                    result = sp.run(['nvidia-smi', '--query-compute-apps=pid', '--format=csv,noheader'],
-                                   capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        pids = [pid.strip() for pid in result.stdout.strip().split('\n') if pid.strip()]
-                        if pids:
-                            print(f"Killing orphaned GPU processes: {pids}")
-                            for pid in pids:
-                                try:
-                                    sp.run(['kill', pid], timeout=2)
-                                except:
-                                    pass
-                            time.sleep(2)
-                except:
-                    pass
+                print("Waiting for DDP processes to exit...")
+                time.sleep(5)  # Give processes time to clean up naturally
             
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
