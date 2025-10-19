@@ -66,7 +66,8 @@ def train_configuration(
     n_embd: int,
     description: str,
     base_config: str = "config/hyperparam_search_base.py",
-    device: str = "cuda"
+    device: str = "cuda",
+    num_gpus: int = 1
 ) -> Tuple[str, float, Dict]:
     """
     Train a single configuration.
@@ -78,6 +79,7 @@ def train_configuration(
         description: Description for run name
         base_config: Base configuration file
         device: Device to train on
+        num_gpus: Number of GPUs to use (1 for single GPU, 8 for DDP)
     
     Returns:
         Tuple of (out_dir, training_time, metrics_dict)
@@ -96,21 +98,38 @@ def train_configuration(
     print(f"  Heads:      {n_head}")
     print(f"  Embedding:  {n_embd}")
     print(f"  Parameters: {total_params:,} (~{total_params/1e6:.2f}M)")
+    print(f"  GPUs:       {num_gpus}")
     print(f"  Output dir: {out_dir}")
     print("="*80 + "\n")
     
-    # Build training command
-    cmd = [
-        sys.executable,  # Use same Python interpreter
-        "train.py",
-        base_config,
-        f"--out_dir={out_dir}",
-        f"--wandb_run_name={run_name}",
-        f"--n_layer={n_layer}",
-        f"--n_head={n_head}",
-        f"--n_embd={n_embd}",
-        f"--device={device}",
-    ]
+    # Build training command (use torchrun for multi-GPU, python for single GPU)
+    if num_gpus > 1:
+        # Multi-GPU training with DDP
+        cmd = [
+            "torchrun",
+            "--standalone",
+            f"--nproc_per_node={num_gpus}",
+            "train.py",
+            base_config,
+            f"--out_dir={out_dir}",
+            f"--wandb_run_name={run_name}",
+            f"--n_layer={n_layer}",
+            f"--n_head={n_head}",
+            f"--n_embd={n_embd}",
+        ]
+    else:
+        # Single GPU training
+        cmd = [
+            sys.executable,
+            "train.py",
+            base_config,
+            f"--out_dir={out_dir}",
+            f"--wandb_run_name={run_name}",
+            f"--n_layer={n_layer}",
+            f"--n_head={n_head}",
+            f"--n_embd={n_embd}",
+            f"--device={device}",
+        ]
     
     # Run training
     start_time = time.time()
@@ -134,11 +153,22 @@ def train_configuration(
 
 def main():
     """Run hyperparameter search."""
+    import argparse
+    parser = argparse.ArgumentParser(description='Run hyperparameter search')
+    parser.add_argument('--num_gpus', type=int, default=1,
+                        help='Number of GPUs to use per configuration (1 or 8)')
+    args = parser.parse_args()
+    
+    num_gpus = args.num_gpus
+    
     print("\n" + "="*80)
     print("SHAKESPEARE CHARACTER-LEVEL MODEL HYPERPARAMETER SEARCH")
     print("="*80)
     print(f"Total configurations to test: {len(CONFIGURATIONS)}")
-    print(f"Expected total time: ~{len(CONFIGURATIONS) * 8} minutes")
+    print(f"GPUs per configuration: {num_gpus}")
+    expected_time_per_config = 8 if num_gpus == 1 else 2
+    print(f"Expected time per config: ~{expected_time_per_config} minutes")
+    print(f"Expected total time: ~{len(CONFIGURATIONS) * expected_time_per_config} minutes")
     print("="*80 + "\n")
     
     # Check if data is prepared
@@ -153,6 +183,17 @@ def main():
     print(f"Using device: {device}")
     if device == "cpu":
         print("WARNING: Training on CPU will be very slow!")
+    
+    if num_gpus > 1:
+        if not torch.cuda.is_available():
+            print("ERROR: Multi-GPU training requested but CUDA not available!")
+            return
+        gpu_count = torch.cuda.device_count()
+        print(f"Available GPUs: {gpu_count}")
+        if gpu_count < num_gpus:
+            print(f"WARNING: Requested {num_gpus} GPUs but only {gpu_count} available!")
+            print(f"Using {gpu_count} GPUs instead.")
+            num_gpus = gpu_count
     print()
     
     # Results storage
@@ -171,7 +212,8 @@ def main():
                 n_head=n_head,
                 n_embd=n_embd,
                 description=description,
-                device=device
+                device=device,
+                num_gpus=num_gpus
             )
             
             # Generate samples and evaluate

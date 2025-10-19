@@ -16,7 +16,7 @@ wandb_run_name = 'baseline'  # Will be overridden
 
 # Dataset
 dataset = 'shakespeare_char'
-gradient_accumulation_steps = 1
+gradient_accumulation_steps = 8  # Set to 8 for 8-GPU training (must be divisible by num GPUs)
 batch_size = 64
 block_size = 256  # context of up to 256 previous characters
 
