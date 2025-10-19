@@ -245,33 +245,26 @@ def main():
                         settings=wandb_settings
                     )
                     
-                    # Log everything: config, training, and evaluation metrics
-                    log_dict = {
-                        # Config
-                        'config/n_layer': n_layer,
-                        'config/n_head': n_head,
-                        'config/n_embd': n_embd,
-                        'config/total_params': result['total_params'],
-                        'config/training_time_min': training_time,
-                        'config/final_iteration': final_iter,
-                        
-                        # Training metrics
-                        'train/final_val_loss': val_loss,
-                        
-                        # Evaluation metrics (always available)
-                        'eval/ngram_overlap_1': metrics['ngram_overlap_1'],
-                        'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
-                        'eval/ngram_overlap_3': metrics['ngram_overlap_3'],
-                        'eval/perplexity': metrics['perplexity'],
-                        'eval/kl_divergence': metrics['kl_divergence'],
-                        'eval/self_bleu': metrics['self_bleu'],
-                        'eval/distinct_1': metrics['distinct_1'],
-                        'eval/distinct_2': metrics['distinct_2'],
-                        'eval/distinct_3': metrics['distinct_3'],
-                        'eval/entropy': metrics['entropy'],
-                    }
+                    # Log config and training metrics to summary (for comparison across runs)
+                    wandb.summary['config/n_layer'] = n_layer
+                    wandb.summary['config/n_head'] = n_head
+                    wandb.summary['config/n_embd'] = n_embd
+                    wandb.summary['config/total_params'] = result['total_params']
+                    wandb.summary['config/training_time_min'] = training_time
+                    wandb.summary['config/final_iteration'] = final_iter
+                    wandb.summary['train/final_val_loss'] = val_loss
                     
-                    wandb.log(log_dict)
+                    # Log evaluation metrics to summary (single point per run for comparison)
+                    wandb.summary['eval/ngram_overlap_1'] = metrics['ngram_overlap_1']
+                    wandb.summary['eval/ngram_overlap_2'] = metrics['ngram_overlap_2']
+                    wandb.summary['eval/ngram_overlap_3'] = metrics['ngram_overlap_3']
+                    wandb.summary['eval/perplexity'] = metrics['perplexity']
+                    wandb.summary['eval/kl_divergence'] = metrics['kl_divergence']
+                    wandb.summary['eval/self_bleu'] = metrics['self_bleu']
+                    wandb.summary['eval/distinct_1'] = metrics['distinct_1']
+                    wandb.summary['eval/distinct_2'] = metrics['distinct_2']
+                    wandb.summary['eval/distinct_3'] = metrics['distinct_3']
+                    wandb.summary['eval/entropy'] = metrics['entropy']
                     
                     # Create visualization plots for metrics
                     import matplotlib.pyplot as plt
