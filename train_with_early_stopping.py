@@ -348,6 +348,19 @@ if master_process:
     else:
         print(f"Completed all {max_iters} iterations")
     print(f"{'='*60}\n")
+    
+    # Save final checkpoint (ensures we always have a checkpoint for evaluation)
+    print(f"Saving final checkpoint to {out_dir}")
+    checkpoint = {
+        'model': raw_model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'model_args': model_args,
+        'iter_num': iter_num,
+        'best_val_loss': best_val_loss,
+        'config': config,
+    }
+    torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+    print("Final checkpoint saved ✓")
 
 # Ensure clean DDP cleanup - only if process group is initialized
 if ddp:
