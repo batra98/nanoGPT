@@ -156,6 +156,11 @@ def main():
     
     num_gpus = args.num_gpus
     
+    # Ensure base output directory exists
+    base_dir = "/nobackup/gaurav"
+    os.makedirs(base_dir, exist_ok=True)
+    print(f"Output directory: {base_dir}")
+    
     print(f"\nStarting search: {len(CONFIGURATIONS)} configs, {num_gpus} GPUs each\n")
     
     # Check data and device
