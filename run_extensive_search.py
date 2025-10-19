@@ -219,13 +219,24 @@ def main():
                 num_gpus=num_gpus
             )
             
-            # Generate samples and evaluate
+            # Wait a moment and clear GPU memory after DDP training
+            if num_gpus > 1:
+                print("\nWaiting for DDP processes to fully terminate...")
+                time.sleep(3)  # Give DDP processes time to clean up
+            
+            # Clear GPU cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            # Generate samples and evaluate (always on single GPU for consistency)
             print(f"\nEvaluating configuration {i}/{len(CONFIGURATIONS)}...")
+            eval_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
             metrics = evaluate_model(
                 out_dir=out_dir,
                 num_samples=args.num_samples,
                 max_new_tokens=500,
-                device=device,
+                device=eval_device,  # Use single GPU for evaluation
                 save_samples=True
             )
             
