@@ -346,3 +346,7 @@ if master_process:
         print(f"Completed all {max_iters} iterations")
     print(f"{'='*60}\n")
 
+# Ensure clean exit
+import sys
+sys.exit(0)
+
