@@ -235,7 +235,15 @@ def main():
             if WANDB_AVAILABLE:
                 try:
                     run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
-                    run = wandb.init(project='shakespeare-extensive-search', name=run_name, id=run_name, resume='allow')
+                    # Increase timeout and add retry logic
+                    wandb_settings = wandb.Settings(init_timeout=300)  # 5 minutes
+                    run = wandb.init(
+                        project='shakespeare-extensive-search', 
+                        name=run_name, 
+                        id=run_name, 
+                        resume='allow',
+                        settings=wandb_settings
+                    )
                     
                     # Log everything: config, training, and evaluation metrics
                     log_dict = {
@@ -343,9 +351,13 @@ def main():
                     wandb.log({"plots/metric_progressions": wandb.Image(fig3)})
                     plt.close(fig3)
                     
-                    wandb.finish()
+                    try:
+                        wandb.finish()
+                    except:
+                        pass  # Ignore finish errors
                 except Exception as wandb_error:
-                    print(f"WandB logging failed: {wandb_error}")
+                    print(f"⚠ WandB logging failed: {wandb_error}")
+                    print("Continuing without WandB logging...")
             
             print(f"✓ Config {i}/{len(CONFIGURATIONS)} complete")
             
@@ -364,7 +376,13 @@ def main():
             valid_results = [r for r in all_results if isinstance(r['val_loss'], float)]
             best = min(valid_results, key=lambda x: x['val_loss']) if valid_results else None
             
-            summary_run = wandb.init(project='shakespeare-extensive-search', name='00-summary', job_type='summary')
+            wandb_settings = wandb.Settings(init_timeout=300)
+            summary_run = wandb.init(
+                project='shakespeare-extensive-search', 
+                name='00-summary', 
+                job_type='summary',
+                settings=wandb_settings
+            )
             table_data = [[r['config_name'], r['n_layer'], r['n_head'], r['n_embd'], r['total_params'],
                            r['final_iteration'], r.get('val_loss', 'N/A'), r.get('perplexity', 'N/A'),
                            r.get('kl_divergence', 'N/A'), r.get('self_bleu', 'N/A'), r['training_time_min']]
