@@ -241,10 +241,12 @@ while True:
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         
         # Check for early stopping
+        improved = False
         if losses['val'] < best_val_loss - early_stopping_min_delta:
             # Significant improvement
             best_val_loss = losses['val']
             early_stopping_counter = 0
+            improved = True
             print(f"✓ Val loss improved to {best_val_loss:.4f}")
         else:
             # No significant improvement
@@ -271,9 +273,8 @@ while True:
                 "early_stopping/best_val_loss": best_val_loss,
             })
         
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            if losses['val'] < best_val_loss:
-                best_val_loss = losses['val']
+        # Save checkpoint when val loss improves (best model) or always_save_checkpoint is True
+        if improved or always_save_checkpoint:
             if iter_num > 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
@@ -283,7 +284,7 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
-                print(f"saving checkpoint to {out_dir}")
+                print(f"💾 Saving checkpoint (best val loss: {best_val_loss:.4f})")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
         
         # Check if early stopping triggered
