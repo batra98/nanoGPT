@@ -91,17 +91,6 @@ def train_configuration(
     # Count parameters
     total_params = count_parameters(n_layer, n_head, n_embd)
     
-    print("\n" + "="*80)
-    print(f"TRAINING CONFIGURATION: {run_name}")
-    print("="*80)
-    print(f"  Layers:     {n_layer}")
-    print(f"  Heads:      {n_head}")
-    print(f"  Embedding:  {n_embd}")
-    print(f"  Parameters: {total_params:,} (~{total_params/1e6:.2f}M)")
-    print(f"  GPUs:       {num_gpus}")
-    print(f"  Output dir: {out_dir}")
-    print(f"  Early stopping: ENABLED (patience=5, delta=0.001)")
-    print("="*80 + "\n")
     
     # Build training command with early stopping script
     if num_gpus > 1:
@@ -143,10 +132,8 @@ def train_configuration(
             text=True
         )
         training_time = (time.time() - start_time) / 60
-        print(f"\n✓ Training completed in {training_time:.2f} minutes")
         
-    except subprocess.CalledProcessError as e:
-        print(f"\n✗ Training failed with error code {e.returncode}")
+    except subprocess.CalledProcessError:
         raise
     
     return out_dir, training_time, {}
@@ -164,49 +151,23 @@ def main():
     
     num_gpus = args.num_gpus
     
-    print("\n" + "="*80)
-    print("EXTENSIVE SHAKESPEARE HYPERPARAMETER SEARCH WITH EARLY STOPPING")
-    print("="*80)
-    print(f"Total configurations to test: {len(CONFIGURATIONS)}")
-    print(f"GPUs per configuration: {num_gpus}")
-    print(f"Max iterations per config: 10,000 (with early stopping)")
-    print(f"Early stopping: patience=5, min_delta=0.001")
-    print(f"Expected time: VARIABLE (depends on convergence)")
-    print("="*80 + "\n")
+    print(f"\nStarting extensive search: {len(CONFIGURATIONS)} configs, {num_gpus} GPUs each\n")
     
-    # Check if data is prepared
-    data_dir = "data/shakespeare_char"
-    if not os.path.exists(os.path.join(data_dir, "train.bin")):
-        print("ERROR: Shakespeare data not found!")
-        print(f"Please run: python {data_dir}/prepare.py")
+    # Check data and device
+    if not os.path.exists("data/shakespeare_char/train.bin"):
+        print("ERROR: Run python data/shakespeare_char/prepare.py first")
         return
     
-    # Check device availability
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    if device == "cpu":
-        print("WARNING: Training on CPU will be very slow!")
-    
-    if num_gpus > 1:
-        if not torch.cuda.is_available():
-            print("ERROR: Multi-GPU training requested but CUDA not available!")
-            return
-        gpu_count = torch.cuda.device_count()
-        print(f"Available GPUs: {gpu_count}")
-        if gpu_count < num_gpus:
-            print(f"WARNING: Requested {num_gpus} GPUs but only {gpu_count} available!")
-            print(f"Using {gpu_count} GPUs instead.")
-            num_gpus = gpu_count
-    print()
+    if num_gpus > 1 and torch.cuda.is_available():
+        num_gpus = min(num_gpus, torch.cuda.device_count())
     
     # Results storage
     all_results = []
     
     # Train each configuration
     for i, (n_layer, n_head, n_embd, description) in enumerate(CONFIGURATIONS, 1):
-        print(f"\n{'#'*80}")
-        print(f"# Configuration {i}/{len(CONFIGURATIONS)}: {description}")
-        print(f"{'#'*80}\n")
+        print(f"\n[{i}/{len(CONFIGURATIONS)}] L{n_layer}-H{n_head}-E{n_embd}")
         
         try:
             # Train model
@@ -219,26 +180,15 @@ def main():
                 num_gpus=num_gpus
             )
             
-            # Wait a moment and clear GPU memory after DDP training
+            # Cleanup and evaluate
             if num_gpus > 1:
-                print("\nWaiting for DDP processes to fully terminate...")
-                time.sleep(3)  # Give DDP processes time to clean up
-            
-            # Clear GPU cache
+                time.sleep(3)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
             
-            # Generate samples and evaluate (always on single GPU for consistency)
-            print(f"\nEvaluating configuration {i}/{len(CONFIGURATIONS)}...")
             eval_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-            metrics = evaluate_model(
-                out_dir=out_dir,
-                num_samples=args.num_samples,
-                max_new_tokens=500,
-                device=eval_device,  # Use single GPU for evaluation
-                save_samples=True
-            )
+            metrics = evaluate_model(out_dir, args.num_samples, 500, eval_device, True)
             
             # Load checkpoint to get losses and iteration count
             ckpt_path = os.path.join(out_dir, 'ckpt.pt')
@@ -268,173 +218,49 @@ def main():
             }
             all_results.append(result)
             
-            # Log evaluation metrics to WandB
+            # Log to WandB
             if WANDB_AVAILABLE:
                 run_name = f"shakespeare-L{n_layer}-H{n_head}-E{n_embd}"
-                try:
-                    run = wandb.init(
-                        project='shakespeare-extensive-search',
-                        name=run_name,
-                        id=run_name,
-                        resume='allow'
-                    )
-                    
-                    wandb.log({
-                        'config/n_layer': n_layer,
-                        'config/n_head': n_head,
-                        'config/n_embd': n_embd,
-                        'config/total_params': result['total_params'],
-                        'config/training_time_min': training_time,
-                        'config/final_iteration': final_iter,
-                        
-                        'eval/ngram_overlap_1': metrics['ngram_overlap_1'],
-                        'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
-                        'eval/ngram_overlap_3': metrics['ngram_overlap_3'],
-                        'eval/perplexity': metrics['perplexity'],
-                        'eval/kl_divergence': metrics['kl_divergence'],
-                        
-                        'eval/self_bleu': metrics['self_bleu'],
-                        'eval/distinct_1': metrics['distinct_1'],
-                        'eval/distinct_2': metrics['distinct_2'],
-                        'eval/distinct_3': metrics['distinct_3'],
-                        'eval/entropy': metrics['entropy'],
-                    })
-                    
-                    samples_path = os.path.join(out_dir, 'generated_samples.txt')
-                    if os.path.exists(samples_path):
-                        artifact = wandb.Artifact(
-                            name=f'samples-{run_name}',
-                            type='generated_text',
-                            description=f'Generated samples from {run_name}'
-                        )
-                        artifact.add_file(samples_path)
-                        wandb.log_artifact(artifact)
-                    
-                    wandb.finish()
-                    print(f"✓ Metrics logged to WandB for {run_name}")
-                    
-                except Exception as e:
-                    print(f"Warning: Failed to log metrics to WandB: {e}")
-            
-            print(f"\n✓ Configuration {i}/{len(CONFIGURATIONS)} complete!")
+                run = wandb.init(project='shakespeare-extensive-search', name=run_name, id=run_name, resume='allow')
+                wandb.log({
+                    'config/n_layer': n_layer, 'config/n_head': n_head, 'config/n_embd': n_embd,
+                    'config/total_params': result['total_params'], 'config/training_time_min': training_time,
+                    'config/final_iteration': final_iter,
+                    'eval/ngram_overlap_1': metrics['ngram_overlap_1'], 'eval/ngram_overlap_2': metrics['ngram_overlap_2'],
+                    'eval/ngram_overlap_3': metrics['ngram_overlap_3'], 'eval/perplexity': metrics['perplexity'],
+                    'eval/kl_divergence': metrics['kl_divergence'], 'eval/self_bleu': metrics['self_bleu'],
+                    'eval/distinct_1': metrics['distinct_1'], 'eval/distinct_2': metrics['distinct_2'],
+                    'eval/distinct_3': metrics['distinct_3'], 'eval/entropy': metrics['entropy'],
+                })
+                if os.path.exists(os.path.join(out_dir, 'generated_samples.txt')):
+                    artifact = wandb.Artifact(f'samples-{run_name}', 'generated_text')
+                    artifact.add_file(os.path.join(out_dir, 'generated_samples.txt'))
+                    wandb.log_artifact(artifact)
+                wandb.finish()
             
         except Exception as e:
-            print(f"\n✗ Configuration {i}/{len(CONFIGURATIONS)} failed: {str(e)}")
+            print(f"Failed: {e}")
             continue
     
-    # Save results summary
-    if all_results:
-        csv_path = "results_extensive_search.csv"
-        print(f"\n{'='*80}")
-        print("SAVING RESULTS SUMMARY")
-        print(f"{'='*80}\n")
-        
-        with open(csv_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
-            writer.writeheader()
-            writer.writerows(all_results)
-        
-        print(f"Results saved to: {csv_path}")
-        
-        # Print summary table
-        print(f"\n{'='*80}")
-        print("RESULTS SUMMARY")
-        print(f"{'='*80}\n")
-        
-        print(f"{'Config':<20} {'Params':<10} {'Iters':<8} {'Time':<8} {'Val Loss':<10} {'Perplexity':<12}")
-        print("-" * 90)
-        
-        for result in all_results:
-            config = result['config_name']
-            params = f"{result['total_params']/1e6:.1f}M"
-            iters = f"{result['final_iteration']}" if isinstance(result['final_iteration'], int) else 'N/A'
-            time_min = f"{result['training_time_min']:.1f}"
-            val_loss = f"{result['val_loss']:.4f}" if isinstance(result['val_loss'], float) else str(result['val_loss'])
-            perplexity = f"{result['perplexity']:.4f}" if 'perplexity' in result else 'N/A'
-            
-            print(f"{config:<20} {params:<10} {iters:<8} {time_min:<8} {val_loss:<10} {perplexity:<12}")
-        
-        # Find best configurations by different metrics
-        valid_results = [r for r in all_results if isinstance(r['val_loss'], float)]
-        if valid_results:
-            best_val_loss = min(valid_results, key=lambda x: x['val_loss'])
-            fastest = min(valid_results, key=lambda x: x['training_time_min'])
-            
-            print("\n" + "="*80)
-            print("BEST CONFIGURATIONS")
-            print("="*80)
-            
-            print("\nBest Validation Loss:")
-            print(f"  Config:      {best_val_loss['config_name']} ({best_val_loss['description']})")
-            print(f"  Val Loss:    {best_val_loss['val_loss']:.4f}")
-            print(f"  Perplexity:  {best_val_loss['perplexity']:.4f}")
-            print(f"  Iterations:  {best_val_loss['final_iteration']}")
-            
-            print("\nFastest Training:")
-            print(f"  Config:      {fastest['config_name']} ({fastest['description']})")
-            print(f"  Time:        {fastest['training_time_min']:.2f} min")
-            print(f"  Val Loss:    {fastest['val_loss']:.4f}")
-            print("="*80 + "\n")
-    
-    # Create WandB summary
+    # WandB summary table
     if WANDB_AVAILABLE and all_results:
-        try:
-            summary_run = wandb.init(
-                project='shakespeare-extensive-search',
-                name='00-summary-comparison',
-                job_type='summary'
-            )
-            
-            table_data = []
-            for result in all_results:
-                table_data.append([
-                    result['config_name'],
-                    result['n_layer'],
-                    result['n_head'],
-                    result['n_embd'],
-                    result['total_params'],
-                    result['final_iteration'],
-                    result.get('val_loss', 'N/A'),
-                    result.get('perplexity', 'N/A'),
-                    result.get('ngram_overlap_2', 'N/A'),
-                    result.get('kl_divergence', 'N/A'),
-                    result.get('self_bleu', 'N/A'),
-                    result.get('distinct_2', 'N/A'),
-                    result.get('entropy', 'N/A'),
-                    result['training_time_min'],
-                ])
-            
-            table = wandb.Table(
-                columns=[
-                    'Config', 'Layers', 'Heads', 'Embd', 'Params', 'Iters',
-                    'Val Loss', 'Perplexity', 'N-gram-2', 'KL Div',
-                    'Self-BLEU', 'Distinct-2', 'Entropy', 'Time (min)'
-                ],
-                data=table_data
-            )
-            
-            wandb.log({"results_comparison": table})
-            
-            if valid_results:
-                wandb.log({
-                    "best_config": best_val_loss['config_name'],
-                    "best_val_loss": best_val_loss['val_loss'],
-                    "best_perplexity": best_val_loss['perplexity'],
-                })
-            
-            wandb.finish()
-            print("✓ Summary table logged to WandB")
-            
-        except Exception as e:
-            print(f"Warning: Failed to create WandB summary: {e}")
+        valid_results = [r for r in all_results if isinstance(r['val_loss'], float)]
+        best = min(valid_results, key=lambda x: x['val_loss']) if valid_results else None
+        
+        summary_run = wandb.init(project='shakespeare-extensive-search', name='00-summary', job_type='summary')
+        table_data = [[r['config_name'], r['n_layer'], r['n_head'], r['n_embd'], r['total_params'],
+                       r['final_iteration'], r.get('val_loss', 'N/A'), r.get('perplexity', 'N/A'),
+                       r.get('kl_divergence', 'N/A'), r.get('self_bleu', 'N/A'), r['training_time_min']]
+                      for r in all_results]
+        table = wandb.Table(columns=['Config', 'Layers', 'Heads', 'Embd', 'Params', 'Iters',
+                                     'Val Loss', 'Perplexity', 'KL Div', 'Self-BLEU', 'Time'],
+                           data=table_data)
+        wandb.log({"results": table})
+        if best:
+            wandb.log({"best_config": best['config_name'], "best_val_loss": best['val_loss']})
+        wandb.finish()
     
-    print("\n" + "="*80)
-    print("EXTENSIVE HYPERPARAMETER SEARCH COMPLETE!")
-    print("="*80)
-    print(f"Total configurations tested: {len(all_results)}")
-    print(f"Results saved to: results_extensive_search.csv")
-    print(f"Check WandB project: shakespeare-extensive-search")
-    print("="*80 + "\n")
+    print(f"\nComplete: {len(all_results)} configs. Check WandB: shakespeare-extensive-search\n")
 
 
 if __name__ == '__main__':
