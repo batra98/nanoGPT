@@ -99,7 +99,11 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # poor man's data loader
-data_dir = os.path.join('data', dataset)
+# Handle both relative paths (e.g., 'shakespeare_char') and absolute paths (e.g., '/nobackup/...')
+if os.path.isabs(dataset):
+    data_dir = dataset
+else:
+    data_dir = os.path.join('data', dataset)
 def get_batch(split):
     if split == 'train':
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
