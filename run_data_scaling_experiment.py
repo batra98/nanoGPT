@@ -288,7 +288,7 @@ def run_data_scaling_experiment(num_gpus: int = 1, skip_existing: bool = True, d
         try:
             metrics = evaluate_model(
                 out_dir=out_dir,
-                num_samples=100,
+                num_samples=10,
                 max_new_tokens=1000,
                 device='cuda' if torch.cuda.is_available() else 'cpu',
                 save_samples=True
