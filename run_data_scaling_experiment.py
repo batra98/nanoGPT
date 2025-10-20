@@ -179,22 +179,40 @@ def run_data_scaling_experiment(num_gpus: int = 1, skip_existing: bool = True, d
     
     if os.path.exists('data_scaling_results.json') and skip_existing:
         print("\n✓ Found existing results file: data_scaling_results.json")
-        with open('data_scaling_results.json', 'r') as f:
-            results = json.load(f)
+        try:
+            with open('data_scaling_results.json', 'r') as f:
+                results = json.load(f)
+            
+            completed_datasets = {r['dataset_name'] for r in results}
+            
+            if completed_datasets:
+                print(f"✓ Already completed: {', '.join(sorted(completed_datasets))}")
+                print(f"⚠ Will skip these and only process remaining datasets")
+            
+            response = input("\nContinue from where we left off? [Y/n]: ").strip().lower()
+            if response == 'n':
+                print("Starting fresh (existing results will be overwritten)...")
+                results = []
+                completed_datasets = set()
+            else:
+                print(f"Resuming... {len(completed_datasets)} already done, {len(DATASET_SIZES) - len(completed_datasets)} to go")
         
-        completed_datasets = {r['dataset_name'] for r in results}
-        
-        if completed_datasets:
-            print(f"✓ Already completed: {', '.join(sorted(completed_datasets))}")
-            print(f"⚠ Will skip these and only process remaining datasets")
-        
-        response = input("\nContinue from where we left off? [Y/n]: ").strip().lower()
-        if response == 'n':
-            print("Starting fresh (existing results will be overwritten)...")
-            results = []
-            completed_datasets = set()
-        else:
-            print(f"Resuming... {len(completed_datasets)} already done, {len(DATASET_SIZES) - len(completed_datasets)} to go")
+        except json.JSONDecodeError as e:
+            print(f"✗ Error: results file is corrupted (JSONDecodeError: {e})")
+            print("  This usually happens when a previous run was interrupted.")
+            response = input("Delete corrupted file and start fresh? [Y/n]: ").strip().lower()
+            if response != 'n':
+                import shutil
+                backup_path = 'data_scaling_results.json.backup'
+                shutil.copy('data_scaling_results.json', backup_path)
+                print(f"  Backed up corrupted file to: {backup_path}")
+                os.remove('data_scaling_results.json')
+                print("  Deleted corrupted file. Starting fresh...")
+                results = []
+                completed_datasets = set()
+            else:
+                print("Exiting. Please fix or delete data_scaling_results.json manually.")
+                return []
     
     for i, (dataset_name, dataset_desc) in enumerate(DATASET_SIZES, 1):
         print(f"\n\n{'#'*70}")
