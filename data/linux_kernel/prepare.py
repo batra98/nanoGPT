@@ -82,12 +82,13 @@ def collect_source_files(repo_dir, num_workers=None):
     
     # Directories to skip (contain test data, traces, generated files, not real code)
     skip_dirs = {
-        'tools/testing',      # Test data and traces
-        'samples',            # Example outputs and test data
+        'tools',              # User-space tools, not kernel code (perf, bpf tools, testing, etc.)
+        'samples',            # Example code and test outputs
         'Documentation',      # Documentation examples (often not valid code)
-        'scripts',            # Build scripts, not kernel code
-        'tools/perf/tests',   # Performance test data
-        'tools/lib/traceevent', # Trace event test data
+        'scripts',            # Build scripts and utilities
+        'usr',                # User-space utilities for initramfs (not kernel code)
+        'certs',              # Certificate files and signing utilities
+        'LICENSES',           # License text files
     }
     
     source_files = []
