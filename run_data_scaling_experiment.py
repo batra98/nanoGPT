@@ -269,11 +269,11 @@ def run_data_scaling_experiment(num_gpus: int = 1, skip_existing: bool = True, d
         # Evaluate model
         try:
             metrics = evaluate_model(
-                checkpoint_path=os.path.join(out_dir, 'ckpt.pt'),
+                out_dir=out_dir,
                 num_samples=100,
-                sample_length=1000,
+                max_new_tokens=1000,
                 device='cuda' if torch.cuda.is_available() else 'cpu',
-                dataset_dir=dataset_dir,
+                save_samples=True
             )
             
             print(f"\n✓ Evaluation complete")
@@ -288,24 +288,37 @@ def run_data_scaling_experiment(num_gpus: int = 1, skip_existing: bool = True, d
             traceback.print_exc()
             metrics = {}
         
-        # Store results
+        # Store results (convert any tensors to Python scalars for JSON serialization)
+        def convert_to_serializable(obj):
+            """Convert tensors and numpy types to Python scalars."""
+            if torch.is_tensor(obj):
+                return obj.item() if obj.numel() == 1 else obj.tolist()
+            elif hasattr(obj, 'item'):  # numpy scalars
+                return obj.item()
+            else:
+                return obj
+        
         result = {
             'dataset_name': dataset_name,
             'dataset_desc': dataset_desc,
             'n_layer': ARCHITECTURE['n_layer'],
             'n_head': ARCHITECTURE['n_head'],
             'n_embd': ARCHITECTURE['n_embd'],
-            'total_params': count_parameters(
+            'total_params': int(count_parameters(
                 ARCHITECTURE['n_layer'], 
                 ARCHITECTURE['n_head'], 
                 ARCHITECTURE['n_embd']
-            ),
+            )),
             'out_dir': out_dir,
-            'val_loss': val_loss,
-            'final_iteration': final_iter,
-            'training_time_min': training_time,
-            **metrics  # Add all evaluation metrics
+            'val_loss': float(val_loss),
+            'final_iteration': int(final_iter),
+            'training_time_min': float(training_time),
         }
+        
+        # Add metrics, converting any non-serializable types
+        for key, value in metrics.items():
+            result[key] = convert_to_serializable(value)
+        
         results.append(result)
         
         # Log to WandB

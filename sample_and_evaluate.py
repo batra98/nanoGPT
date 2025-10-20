@@ -187,7 +187,11 @@ def evaluate_model(
     
     # Determine dataset directory
     dataset = checkpoint['config'].get('dataset', 'shakespeare_char')
-    data_dir = os.path.join('data', dataset)
+    # Handle both relative and absolute paths
+    if os.path.isabs(dataset):
+        data_dir = dataset
+    else:
+        data_dir = os.path.join('data', dataset)
     
     evaluator = EvaluationMetrics(data_dir=data_dir)
     metrics = evaluator.compute_all_metrics(samples, val_loss)
