@@ -80,10 +80,29 @@ def collect_source_files(repo_dir, num_workers=None):
     """Find and concatenate all .c and .h files (parallelized)."""
     print(f"\nCollecting all .c and .h files from {repo_dir}...")
     
+    # Directories to skip (contain test data, traces, generated files, not real code)
+    skip_dirs = {
+        'tools/testing',      # Test data and traces
+        'samples',            # Example outputs and test data
+        'Documentation',      # Documentation examples (often not valid code)
+        'scripts',            # Build scripts, not kernel code
+        'tools/perf/tests',   # Performance test data
+        'tools/lib/traceevent', # Trace event test data
+    }
+    
     source_files = []
     for root, dirs, files in os.walk(repo_dir):
         # Skip .git directory
         if '.git' in root:
+            continue
+        
+        # Skip directories containing test data or non-code files
+        skip = False
+        for skip_dir in skip_dirs:
+            if skip_dir in root:
+                skip = True
+                break
+        if skip:
             continue
         
         for file in files:
