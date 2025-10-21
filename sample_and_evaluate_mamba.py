@@ -167,6 +167,7 @@ def evaluate_model(
     checkpoint = torch.load(os.path.join(out_dir, 'ckpt.pt'), map_location='cpu')
     config = checkpoint.get('config', {})
     dataset = config.get('dataset', 'shakespeare_char')
+    val_loss = checkpoint.get('best_val_loss', 0.0)
     
     # Determine data directory
     if os.path.isabs(dataset):
@@ -244,7 +245,7 @@ def evaluate_model(
     # Compute metrics
     print("\n4. Computing evaluation metrics...")
     evaluator = EvaluationMetrics(data_dir=data_dir)
-    metrics = evaluator.compute_all_metrics(generated_samples)
+    metrics = evaluator.compute_all_metrics(generated_samples, val_loss)
     
     # Print metrics
     print("\n" + "="*70)
@@ -252,9 +253,9 @@ def evaluate_model(
     print("="*70)
     
     print("\nSpecific Metrics (training-data-dependent):")
-    print(f"  1-gram overlap:  {metrics['1-gram_overlap']:.4f}")
-    print(f"  2-gram overlap:  {metrics['2-gram_overlap']:.4f}")
-    print(f"  3-gram overlap:  {metrics['3-gram_overlap']:.4f}")
+    print(f"  1-gram overlap:  {metrics['ngram_overlap_1']:.4f}")
+    print(f"  2-gram overlap:  {metrics['ngram_overlap_2']:.4f}")
+    print(f"  3-gram overlap:  {metrics['ngram_overlap_3']:.4f}")
     print(f"  Perplexity:      {metrics['perplexity']:.4f}")
     print(f"  KL divergence:   {metrics['kl_divergence']:.4f}")
     
@@ -263,7 +264,7 @@ def evaluate_model(
     print(f"  Distinct-1:      {metrics['distinct_1']:.4f}")
     print(f"  Distinct-2:      {metrics['distinct_2']:.4f}")
     print(f"  Distinct-3:      {metrics['distinct_3']:.4f}")
-    print(f"  Shannon entropy: {metrics['shannon_entropy']:.4f}")
+    print(f"  Entropy:         {metrics['entropy']:.4f}")
     
     # Save metrics
     metrics_path = os.path.join(out_dir, 'evaluation_metrics.json')
