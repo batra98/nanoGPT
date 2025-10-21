@@ -12,6 +12,7 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import wandb
 
 
 def load_results(results_file='finetuning_experiment_results.json'):
@@ -372,6 +373,10 @@ def main():
                        help='Path to results JSON file')
     parser.add_argument('--output_dir', type=str, default='finetuning_analysis',
                        help='Directory to save analysis outputs')
+    parser.add_argument('--wandb_project', type=str, default='shakespeare-to-kernel-finetune',
+                       help='WandB project name')
+    parser.add_argument('--no_wandb', action='store_true',
+                       help='Disable WandB logging')
     
     args = parser.parse_args()
     
@@ -379,30 +384,97 @@ def main():
     print("ANALYZING FINE-TUNING EXPERIMENTS")
     print(f"{'='*70}\n")
     
+    # Initialize WandB for analysis
+    if not args.no_wandb:
+        print("Initializing WandB for analysis...")
+        wandb.init(
+            project=args.wandb_project,
+            name='analysis-summary',
+            job_type='analysis',
+            config={
+                'results_file': args.results_file,
+                'output_dir': args.output_dir,
+            }
+        )
+        print("✓ WandB initialized\n")
+    
     # Load results
     print(f"Loading results from {args.results_file}...")
     results = load_results(args.results_file)
     print(f"✓ Loaded {len(results['experiments'])} experiments\n")
     
+    # Log experiment count to WandB
+    if not args.no_wandb:
+        wandb.summary['total_experiments'] = len(results['experiments'])
+    
     # Create visualizations
     print("Creating visualizations...")
     create_transition_over_iterations_plot(results, args.output_dir)
+    if not args.no_wandb:
+        wandb.log({
+            "plots/transition_over_iterations": wandb.Image(
+                os.path.join(args.output_dir, 'transition_over_iterations.png')
+            )
+        })
+    
     create_multi_metric_comparison(results, args.output_dir)
+    if not args.no_wandb:
+        wandb.log({
+            "plots/multi_metric_comparison": wandb.Image(
+                os.path.join(args.output_dir, 'multi_metric_comparison.png')
+            )
+        })
     
     # Create heatmaps for key metrics
     for metric in ['transition_score', 'code_likeness_score', 'shakespeare_likeness_score']:
         create_metrics_heatmap(results, metric, args.output_dir)
+        if not args.no_wandb:
+            wandb.log({
+                f"plots/{metric}_heatmap": wandb.Image(
+                    os.path.join(args.output_dir, f'{metric}_heatmap.png')
+                )
+            })
     
     print("\nCreating summary table...")
     df = create_summary_table(results, args.output_dir)
     
+    # Upload summary table to WandB
+    if not args.no_wandb:
+        print("Uploading summary table to WandB...")
+        wandb_table = wandb.Table(dataframe=df)
+        wandb.log({"summary_table": wandb_table})
+        
+        # Log key metrics from each experiment
+        for exp in results['experiments']:
+            if exp.get('metrics'):
+                wandb.log({
+                    f"{exp['data_size']}/{exp['max_iters']}iter/transition_score": 
+                        exp['metrics'].get('transition_score', 0),
+                    f"{exp['data_size']}/{exp['max_iters']}iter/code_likeness": 
+                        exp['metrics'].get('code_likeness_score', 0),
+                    f"{exp['data_size']}/{exp['max_iters']}iter/shakespeare_likeness": 
+                        exp['metrics'].get('shakespeare_likeness_score', 0),
+                })
+    
     print("\nGenerating markdown report...")
     create_markdown_report(results, df, args.output_dir)
+    
+    # Upload markdown report to WandB
+    if not args.no_wandb:
+        report_path = os.path.join(args.output_dir, 'FINETUNING_REPORT.md')
+        wandb.save(report_path)
+        print("✓ Uploaded report to WandB")
+    
+    # Finish WandB run
+    if not args.no_wandb:
+        wandb.finish()
     
     print(f"\n{'='*70}")
     print("ANALYSIS COMPLETE")
     print(f"{'='*70}")
     print(f"All outputs saved to: {args.output_dir}/")
+    if not args.no_wandb:
+        print(f"WandB project: {args.wandb_project}")
     print(f"{'='*70}\n")
 
 

@@ -66,7 +66,11 @@ python run_finetuning_experiment.py \
 
 After experiments complete:
 ```bash
+# Analyze and upload to WandB
 python analyze_finetuning.py
+
+# Or analyze without WandB
+python analyze_finetuning.py --no_wandb
 ```
 
 This generates:
@@ -74,6 +78,8 @@ This generates:
 - `finetuning_analysis/multi_metric_comparison.png` - Detailed metrics
 - `finetuning_analysis/experiment_summary.csv` - Summary table
 - `finetuning_analysis/FINETUNING_REPORT.md` - Full report
+
+**WandB Integration**: All plots, tables, and metrics are automatically uploaded to WandB project `shakespeare-to-kernel-finetune` under a run named `analysis-summary`. View comprehensive visualizations and interactive tables in the WandB dashboard.
 
 ## File Structure
 
@@ -176,12 +182,16 @@ Per experiment (on 8× RTX 2080 Ti):
 
 Results are logged to WandB project: `shakespeare-to-kernel-finetune`
 
-Each run is named: `finetune-{data_size}-{iterations}iter`
-
-Monitor:
+**Training Runs**: Each run is named `finetune-{data_size}-{iterations}iter`
 - Training/validation loss curves
 - Transition metrics in real-time
 - Generated samples
+
+**Analysis Run**: After running `analyze_finetuning.py`, a special run named `analysis-summary` is created with:
+- All comparison plots (transition curves, heatmaps, multi-metric panels)
+- Interactive summary table
+- Aggregated metrics across all experiments
+- Markdown report
 
 ## Troubleshooting
 
