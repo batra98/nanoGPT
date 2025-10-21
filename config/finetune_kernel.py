@@ -19,8 +19,12 @@ wandb_run_name = 'finetune-' + str(time.time())
 # Dataset - will be overridden by orchestration script
 dataset = '/nobackup/gaurav/kernel_code/100k'
 
-# Initialize from pre-trained Shakespeare checkpoint
-init_from = 'resume'  # Will load from out_dir/ckpt.pt
+# Source checkpoint for transfer learning - will be overridden by orchestration script
+source_checkpoint = 'out-shakespeare-pretrained/ckpt.pt'
+
+# Transfer learning settings
+freeze_transformer = False  # Set to True to only train embeddings
+init_from = 'scratch'  # Not used in transfer learning script, but kept for compatibility
 
 # Batch settings - optimized for 8 GPUs
 batch_size = 64

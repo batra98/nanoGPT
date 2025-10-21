@@ -132,28 +132,25 @@ def finetune_model(base_checkpoint_dir, dataset_path, max_iters, num_gpus=8):
     # Create output directory
     os.makedirs(out_dir, exist_ok=True)
     
-    # Copy base checkpoint to output directory
+    # Verify base checkpoint exists
     base_ckpt = os.path.join(base_checkpoint_dir, 'ckpt.pt')
-    out_ckpt = os.path.join(out_dir, 'ckpt.pt')
+    if not os.path.exists(base_ckpt):
+        raise FileNotFoundError(f"Base checkpoint not found at {base_ckpt}")
     
-    if not os.path.exists(out_ckpt):
-        print(f"Copying base checkpoint to {out_dir}...")
-        shutil.copy2(base_ckpt, out_ckpt)
-    
-    # Prepare training command
+    # Prepare training command using transfer learning script
     dataset_abs_path = os.path.abspath(dataset_path)
     
     cmd = [
         'torchrun',
         f'--nproc_per_node={num_gpus}',
-        'train.py',
+        'train_transfer_learning.py',
         'config/finetune_kernel.py',
         f'--out_dir={out_dir}',
         f'--dataset={dataset_abs_path}',
         f'--max_iters={max_iters}',
         f'--lr_decay_iters={max_iters}',
         f'--wandb_run_name=finetune-{dataset_name}-{max_iters}iter',
-        '--init_from=resume',
+        f'--source_checkpoint={os.path.abspath(base_checkpoint_dir)}/ckpt.pt',
     ]
     
     print(f"\nRunning: {' '.join(cmd)}")

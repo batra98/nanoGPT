@@ -18,6 +18,20 @@ Answer the question: **How much training data and iterations are needed to shift
    - Required sizes: 100k, 500k, 1m, 5m
    - If not prepared, run: `python data/linux_kernel/prepare.py`
 
+## Transfer Learning Approach
+
+**Important**: The Shakespeare and kernel code datasets have different vocabularies:
+- Shakespeare: ~65 characters (letters, punctuation, common symbols)
+- Kernel C code: ~100+ characters (includes more symbols like `{}`, `[]`, `#`, etc.)
+
+We use a **transfer learning script** (`train_transfer_learning.py`) that:
+1. Loads the pre-trained Shakespeare checkpoint
+2. Creates a new model with the target vocabulary size
+3. Copies compatible weights (transformer blocks)
+4. Randomly initializes new embedding layers
+
+This prevents the "CUDA index out of bounds" error that would occur with naive fine-tuning.
+
 ## Quick Start
 
 ### 1. Download Pre-trained Checkpoint
