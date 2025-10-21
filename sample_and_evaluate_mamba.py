@@ -118,13 +118,17 @@ def generate_samples(
             x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
             
             # Generate
+            print(f"  Sample {i + 1}/{num_samples} - generating {max_new_tokens} tokens (this may take a while)...")
+            import time
+            start_time = time.time()
+            
             with torch.no_grad():
                 y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
                 generated_text = decode(y[0].tolist())
                 samples.append(generated_text)
             
-            if (i + 1) % 5 == 0:
-                print(f"  Generated {i + 1}/{num_samples} samples")
+            elapsed = time.time() - start_time
+            print(f"    ✓ Completed in {elapsed:.1f}s")
     
     print(f"✓ Generated {len(samples)} samples")
     return samples
@@ -158,7 +162,7 @@ def evaluate_model(
     print("\n1. Loading model...")
     model, encode, decode = load_model(out_dir, device)
     
-    # Load training data for comparison metrics
+    # Get dataset path for metrics
     print("\n2. Loading training data...")
     checkpoint = torch.load(os.path.join(out_dir, 'ckpt.pt'), map_location='cpu')
     config = checkpoint.get('config', {})
@@ -170,27 +174,60 @@ def evaluate_model(
     else:
         data_dir = os.path.join('data', dataset)
     
-    # Load training text
-    train_data_path = os.path.join(data_dir, 'train.bin')
-    if os.path.exists(train_data_path):
-        train_data = np.memmap(train_data_path, dtype=np.uint16, mode='r')
-        # Sample some text for metrics computation (limit to reasonable size)
-        sample_size = min(100000, len(train_data))
-        train_text = decode(train_data[:sample_size].tolist())
-    else:
-        print(f"Warning: Could not load training data from {train_data_path}")
-        train_text = ""
+    # Check if samples already exist
+    samples_path = os.path.join(out_dir, 'generated_samples.txt')
     
-    # Generate samples
-    print(f"\n3. Generating {num_samples} samples...")
-    generated_samples = generate_samples(
-        model=model,
-        encode=encode,
-        decode=decode,
-        num_samples=num_samples,
-        max_new_tokens=max_new_tokens,
-        device=device
-    )
+    if os.path.exists(samples_path):
+        print(f"\n3. Loading existing samples from {samples_path}...")
+        with open(samples_path, 'r') as f:
+            content = f.read()
+        
+        # Parse samples (they're separated by "="*60 headers)
+        generated_samples = []
+        current_sample = []
+        in_sample = False
+        
+        for line in content.split('\n'):
+            if line.startswith('='*60):
+                if current_sample and in_sample:
+                    # End of a sample
+                    generated_samples.append('\n'.join(current_sample))
+                    current_sample = []
+                    in_sample = False
+            elif line.startswith('Sample '):
+                in_sample = True
+            elif in_sample and line.strip():
+                current_sample.append(line)
+        
+        # Add last sample if exists
+        if current_sample:
+            generated_samples.append('\n'.join(current_sample))
+        
+        print(f"✓ Loaded {len(generated_samples)} existing samples")
+        
+        # If not enough samples, generate more
+        if len(generated_samples) < num_samples:
+            print(f"\n   Need {num_samples - len(generated_samples)} more samples...")
+            additional_samples = generate_samples(
+                model=model,
+                encode=encode,
+                decode=decode,
+                num_samples=num_samples - len(generated_samples),
+                max_new_tokens=max_new_tokens,
+                device=device
+            )
+            generated_samples.extend(additional_samples)
+    else:
+        # Generate samples from scratch
+        print(f"\n3. Generating {num_samples} samples...")
+        generated_samples = generate_samples(
+            model=model,
+            encode=encode,
+            decode=decode,
+            num_samples=num_samples,
+            max_new_tokens=max_new_tokens,
+            device=device
+        )
     
     # Save samples
     if save_samples:
@@ -206,7 +243,7 @@ def evaluate_model(
     
     # Compute metrics
     print("\n4. Computing evaluation metrics...")
-    evaluator = EvaluationMetrics(training_text=train_text)
+    evaluator = EvaluationMetrics(data_dir=data_dir)
     metrics = evaluator.compute_all_metrics(generated_samples)
     
     # Print metrics
