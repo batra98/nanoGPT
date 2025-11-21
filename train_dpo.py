@@ -389,16 +389,22 @@ def main():
         enc = tiktoken.get_encoding("gpt2")
         encode = lambda s: enc.encode(s)
     
-    # Prepare DPO datasets
+    # Prepare DPO datasets (only on master process)
     train_dpo_path = args.train_data.replace('.pkl', '_dpo.pkl')
     val_dpo_path = args.val_data.replace('.pkl', '_dpo.pkl')
     
-    if not os.path.exists(train_dpo_path):
-        prepare_dpo_data(args.train_data, encode, train_dpo_path)
-    if not os.path.exists(val_dpo_path):
-        prepare_dpo_data(args.val_data, encode, val_dpo_path)
+    if master_process:
+        if not os.path.exists(train_dpo_path):
+            prepare_dpo_data(args.train_data, encode, train_dpo_path)
+        if not os.path.exists(val_dpo_path):
+            prepare_dpo_data(args.val_data, encode, val_dpo_path)
     
-    # Load datasets
+    # Wait for master to finish preparing data (DDP barrier)
+    if ddp:
+        import torch.distributed as dist
+        dist.barrier()
+    
+    # Load datasets (all processes)
     train_dataset = PreferenceDataset(train_dpo_path)
     val_dataset = PreferenceDataset(val_dpo_path)
     
