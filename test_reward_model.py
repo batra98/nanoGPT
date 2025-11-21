@@ -244,14 +244,14 @@ def main():
             'density_distribution': wandb.Histogram(densities),
         })
         
-        # Log scatter plot
+        # Log scatter plot data as table
+        table_data = [[d, r] for d, r in zip(densities, rewards)]
+        scatter_table = wandb.Table(
+            columns=['dialogue_density', 'reward'],
+            data=table_data
+        )
         wandb.log({
-            'reward_vs_density': wandb.Scatter(
-                x=densities,
-                y=rewards,
-                xname='Dialogue Density',
-                yname='Reward'
-            )
+            'reward_vs_density': scatter_table
         })
     
     # Save results to file
