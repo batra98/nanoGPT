@@ -2,7 +2,7 @@
 Generate preference pairs for reward model training.
 
 This script:
-1. Loads the Linux kernel pretrained checkpoint
+1. Loads the pretrained checkpoint (e.g., Shakespeare)
 2. Samples pairs of completions for the same prompts
 3. Uses preference heuristic to label which is better
 4. Saves training data for reward model
@@ -19,7 +19,7 @@ import numpy as np
 from tqdm import tqdm
 
 from model import GPTConfig, GPT
-from preference_heuristic import assign_preference, compute_comment_density, report_statistics
+from preference_heuristic import assign_preference, compute_dialogue_density, report_statistics
 
 
 def load_model_and_data(checkpoint_dir: str, device: str = 'cuda'):
