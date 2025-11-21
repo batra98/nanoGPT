@@ -311,8 +311,7 @@ def main():
         args.device = f'cuda:{ddp_local_rank}'
         torch.cuda.set_device(args.device)
         master_process = ddp_rank == 0
-        assert args.batch_size % ddp_world_size == 0
-        args.batch_size //= ddp_world_size
+        # batch_size is per-GPU, total batch = batch_size * world_size
     else:
         master_process = True
         ddp_world_size = 1
@@ -430,7 +429,7 @@ def main():
             config={
                 'ref_checkpoint': args.ref_checkpoint,
                 'batch_size_per_gpu': args.batch_size,
-                'total_batch_size': args.batch_size * ddp_world_size,
+                'total_batch_size': args.batch_size * ddp_world_size if ddp else args.batch_size,
                 'block_size': args.block_size,
                 'num_epochs': args.num_epochs,
                 'learning_rate': args.learning_rate,

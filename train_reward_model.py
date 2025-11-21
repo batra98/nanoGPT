@@ -244,8 +244,7 @@ def main():
         args.device = f'cuda:{ddp_local_rank}'
         torch.cuda.set_device(args.device)
         master_process = ddp_rank == 0
-        assert args.batch_size % ddp_world_size == 0
-        args.batch_size //= ddp_world_size
+        # batch_size is per-GPU, total batch = batch_size * world_size
     else:
         master_process = True
         ddp_world_size = 1
@@ -263,7 +262,7 @@ def main():
         print(f"Val data: {args.val_data}")
         print(f"Output directory: {args.out_dir}")
         print(f"Batch size per GPU: {args.batch_size}")
-        print(f"Total batch size: {args.batch_size * ddp_world_size}")
+        print(f"Total batch size: {args.batch_size * ddp_world_size if ddp else args.batch_size}")
         print(f"Block size: {args.block_size}")
         print(f"Num epochs: {args.num_epochs}")
         print(f"Learning rate: {args.learning_rate}")
