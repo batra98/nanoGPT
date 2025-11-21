@@ -160,6 +160,12 @@ def main():
                        help='Device')
     parser.add_argument('--output_dir', type=str, default='results',
                        help='Output directory')
+    parser.add_argument('--wandb_log', action='store_true', default=False,
+                       help='Enable wandb logging')
+    parser.add_argument('--wandb_project', type=str, default='rlhf-dpo',
+                       help='Wandb project name')
+    parser.add_argument('--wandb_run_name', type=str, default='dpo-evaluation',
+                       help='Wandb run name')
     
     args = parser.parse_args()
     
@@ -227,6 +233,50 @@ def main():
     if kl_mean is not None:
         print(f"\nKL Divergence: {kl_mean:.4f} ± {kl_std:.4f}")
     
+    # Initialize wandb and log metrics
+    if args.wandb_log:
+        import wandb
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                'base_checkpoint': args.base_checkpoint,
+                'dpo_checkpoint': args.dpo_checkpoint,
+                'reward_checkpoint': args.reward_checkpoint,
+                'num_samples': args.num_samples,
+            }
+        )
+        
+        reward_improvement = np.mean(dpo_rewards) - np.mean(base_rewards)
+        density_improvement = np.mean(dpo_densities) - np.mean(base_densities)
+        
+        wandb.log({
+            'base/mean_reward': np.mean(base_rewards),
+            'base/std_reward': np.std(base_rewards),
+            'base/mean_density': np.mean(base_densities),
+            'base/std_density': np.std(base_densities),
+            'dpo/mean_reward': np.mean(dpo_rewards),
+            'dpo/std_reward': np.std(dpo_rewards),
+            'dpo/mean_density': np.mean(dpo_densities),
+            'dpo/std_density': np.std(dpo_densities),
+            'improvement/reward': reward_improvement,
+            'improvement/density': density_improvement,
+        })
+        
+        if kl_mean is not None:
+            wandb.log({
+                'kl_divergence/mean': kl_mean,
+                'kl_divergence/std': kl_std,
+            })
+        
+        # Log histograms
+        wandb.log({
+            'reward_distribution/base': wandb.Histogram(base_rewards),
+            'reward_distribution/dpo': wandb.Histogram(dpo_rewards),
+            'density_distribution/base': wandb.Histogram(base_densities),
+            'density_distribution/dpo': wandb.Histogram(dpo_densities),
+        })
+    
     # Save results
     output_file = os.path.join(args.output_dir, 'dpo_evaluation.txt')
     with open(output_file, 'w') as f:
@@ -291,8 +341,15 @@ def main():
         plot_file = os.path.join(args.output_dir, 'dpo_comparison.png')
         plt.savefig(plot_file, dpi=150)
         print(f"✓ Plot saved to {plot_file}")
+        
+        # Log plot to wandb
+        if args.wandb_log:
+            wandb.log({'comparison_plot': wandb.Image(plot_file)})
     except Exception as e:
         print(f"Could not create plots: {e}")
+    
+    if args.wandb_log:
+        wandb.finish()
 
 
 if __name__ == '__main__':

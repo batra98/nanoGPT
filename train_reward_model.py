@@ -223,6 +223,12 @@ def main():
                        help='Device to use')
     parser.add_argument('--freeze_gpt', action='store_true', default=True,
                        help='Freeze GPT weights (only train reward head)')
+    parser.add_argument('--wandb_log', action='store_true', default=False,
+                       help='Enable wandb logging')
+    parser.add_argument('--wandb_project', type=str, default='rlhf-reward-model',
+                       help='Wandb project name')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                       help='Wandb run name (default: auto-generated)')
     
     args = parser.parse_args()
     
@@ -279,6 +285,24 @@ def main():
         lr=args.learning_rate
     )
     
+    # Initialize wandb
+    if args.wandb_log:
+        import wandb
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name or f"reward-model-{int(time.time())}",
+            config={
+                'gpt_checkpoint': args.gpt_checkpoint,
+                'batch_size': args.batch_size,
+                'block_size': args.block_size,
+                'num_epochs': args.num_epochs,
+                'learning_rate': args.learning_rate,
+                'freeze_gpt': args.freeze_gpt,
+                'train_samples': len(train_dataset),
+                'val_samples': len(val_dataset),
+            }
+        )
+    
     # Training loop
     print(f"\n{'='*60}")
     print("Starting Training")
@@ -306,6 +330,17 @@ def main():
         print(f"  Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
         print(f"  Val   - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
         
+        # Log to wandb
+        if args.wandb_log:
+            wandb.log({
+                'epoch': epoch + 1,
+                'train/loss': train_loss,
+                'train/accuracy': train_acc,
+                'val/loss': val_loss,
+                'val/accuracy': val_acc,
+                'time_per_epoch': dt,
+            })
+        
         # Save best model
         if val_acc > best_val_accuracy:
             best_val_accuracy = val_acc
@@ -321,6 +356,9 @@ def main():
             }
             torch.save(checkpoint, os.path.join(args.out_dir, 'best_model.pt'))
             print(f"  → Saved best model (val_acc={val_acc:.4f})")
+            
+            if args.wandb_log:
+                wandb.log({'best_val_accuracy': best_val_accuracy})
         
         print()
     
@@ -329,6 +367,10 @@ def main():
     print(f"{'='*60}")
     print(f"Best validation accuracy: {best_val_accuracy:.4f}")
     print(f"Model saved to: {args.out_dir}/best_model.pt")
+    
+    if args.wandb_log:
+        wandb.log({'final/best_val_accuracy': best_val_accuracy})
+        wandb.finish()
 
 
 if __name__ == '__main__':

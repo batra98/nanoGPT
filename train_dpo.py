@@ -290,6 +290,12 @@ def main():
                        help='DPO temperature (higher = stay closer to reference)')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device')
+    parser.add_argument('--wandb_log', action='store_true', default=False,
+                       help='Enable wandb logging')
+    parser.add_argument('--wandb_project', type=str, default='rlhf-dpo',
+                       help='Wandb project name')
+    parser.add_argument('--wandb_run_name', type=str, default=None,
+                       help='Wandb run name (default: auto-generated)')
     
     args = parser.parse_args()
     
@@ -380,6 +386,24 @@ def main():
     # Optimizer
     optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.learning_rate)
     
+    # Initialize wandb
+    if args.wandb_log:
+        import wandb
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name or f"dpo-{int(time.time())}",
+            config={
+                'ref_checkpoint': args.ref_checkpoint,
+                'batch_size': args.batch_size,
+                'block_size': args.block_size,
+                'num_epochs': args.num_epochs,
+                'learning_rate': args.learning_rate,
+                'beta': args.beta,
+                'train_samples': len(train_dataset),
+                'val_samples': len(val_dataset),
+            }
+        )
+    
     print(f"\nStarting DPO training...")
     print(f"Beta: {args.beta}")
     print(f"Learning rate: {args.learning_rate}")
@@ -404,6 +428,21 @@ def main():
         print(f"  Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, R_w: {train_rw_w:.4f}, R_l: {train_rw_l:.4f}")
         print(f"  Val   - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, R_w: {val_rw_w:.4f}, R_l: {val_rw_l:.4f}")
         
+        # Log to wandb
+        if args.wandb_log:
+            wandb.log({
+                'epoch': epoch + 1,
+                'train/loss': train_loss,
+                'train/accuracy': train_acc,
+                'train/reward_winner': train_rw_w,
+                'train/reward_loser': train_rw_l,
+                'val/loss': val_loss,
+                'val/accuracy': val_acc,
+                'val/reward_winner': val_rw_w,
+                'val/reward_loser': val_rw_l,
+                'time_per_epoch': t1 - t0,
+            })
+        
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             checkpoint = {
@@ -423,6 +462,10 @@ def main():
     print(f"{'='*60}")
     print(f"Best val accuracy: {best_val_acc:.4f}")
     print(f"Model saved to: {args.out_dir}/ckpt.pt")
+    
+    if args.wandb_log:
+        wandb.log({'final/best_val_accuracy': best_val_acc})
+        wandb.finish()
 
 
 if __name__ == '__main__':

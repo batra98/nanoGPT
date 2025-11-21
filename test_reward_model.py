@@ -140,6 +140,12 @@ def main():
                        help='Device to use')
     parser.add_argument('--output_file', type=str, default='results/reward_model_test.txt',
                        help='Output file for results')
+    parser.add_argument('--wandb_log', action='store_true', default=False,
+                       help='Enable wandb logging')
+    parser.add_argument('--wandb_project', type=str, default='rlhf-reward-model',
+                       help='Wandb project name')
+    parser.add_argument('--wandb_run_name', type=str, default='reward-test',
+                       help='Wandb run name')
     
     args = parser.parse_args()
     
@@ -208,6 +214,46 @@ def main():
     correlation = np.corrcoef(rewards, densities)[0, 1]
     print(f"\nCorrelation (reward vs density): {correlation:.4f}")
     
+    # Initialize wandb and log metrics
+    if args.wandb_log:
+        import wandb
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                'reward_checkpoint': args.reward_checkpoint,
+                'gpt_checkpoint': args.gpt_checkpoint,
+                'num_samples': args.num_samples,
+            }
+        )
+        
+        # Log statistics
+        wandb.log({
+            'test/mean_reward': np.mean(rewards),
+            'test/std_reward': np.std(rewards),
+            'test/min_reward': np.min(rewards),
+            'test/max_reward': np.max(rewards),
+            'test/mean_density': np.mean(densities),
+            'test/std_density': np.std(densities),
+            'test/correlation': correlation,
+        })
+        
+        # Log reward distribution
+        wandb.log({
+            'reward_distribution': wandb.Histogram(rewards),
+            'density_distribution': wandb.Histogram(densities),
+        })
+        
+        # Log scatter plot
+        wandb.log({
+            'reward_vs_density': wandb.Scatter(
+                x=densities,
+                y=rewards,
+                xname='Dialogue Density',
+                yname='Reward'
+            )
+        })
+    
     # Save results to file
     with open(args.output_file, 'w') as f:
         f.write("="*60 + "\n")
@@ -259,6 +305,9 @@ def main():
     idx = sorted_indices[0]
     print(f"Reward: {rewards[idx]:.4f}, Density: {densities[idx]:.4f}")
     print(samples[idx][:300])
+    
+    if args.wandb_log:
+        wandb.finish()
 
 
 if __name__ == '__main__':
