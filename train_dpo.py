@@ -82,19 +82,27 @@ def get_log_probs(model, tokens, prompt_len=None):
     Returns:
         log_probs: Log probabilities (batch_size,)
     """
-    # Forward pass
-    logits, _ = model(tokens[:, :-1], targets=None)  # Predict next token
+    # Forward pass - need full logits, so pass targets to get all positions
+    # We'll ignore the loss
+    input_tokens = tokens[:, :-1]  # All but last token
+    target_tokens = tokens[:, 1:]   # All but first token (shifted)
+    
+    # Get full logits by passing targets (model computes logits for all positions)
+    logits, _ = model(input_tokens, targets=target_tokens)
     
     # Get log probs
     log_probs = F.log_softmax(logits, dim=-1)
     
     # Gather log probs of actual next tokens
-    next_tokens = tokens[:, 1:]  # Shifted targets
-    log_probs = torch.gather(log_probs, -1, next_tokens.unsqueeze(-1)).squeeze(-1)
+    # log_probs shape: (batch_size, seq_len, vocab_size)
+    # target_tokens shape: (batch_size, seq_len)
+    log_probs = torch.gather(log_probs, -1, target_tokens.unsqueeze(-1)).squeeze(-1)
+    # Now log_probs shape: (batch_size, seq_len)
     
     # Mask out prompt tokens if prompt_len is provided
     if prompt_len is not None:
-        mask = torch.arange(log_probs.size(1), device=log_probs.device)[None, :] >= prompt_len[:, None]
+        seq_len = log_probs.size(1)
+        mask = torch.arange(seq_len, device=log_probs.device)[None, :] >= prompt_len[:, None]
         log_probs = log_probs * mask.float()
         # Sum log probs (only over completion, not prompt)
         log_probs = log_probs.sum(dim=1) / mask.float().sum(dim=1).clamp(min=1)
