@@ -350,8 +350,8 @@ def main():
         lr=args.learning_rate
     )
     
-    # Initialize wandb
-    if args.wandb_log:
+    # Initialize wandb (only on master process)
+    if args.wandb_log and master_process:
         import wandb
         wandb.init(
             project=args.wandb_project,
