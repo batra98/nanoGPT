@@ -286,11 +286,40 @@ def main():
     else:
         raw_model = reward_model
     
+    # Get encode function from checkpoint
+    if master_process:
+        print("\nLoading encode function...")
+    checkpoint = torch.load(args.gpt_checkpoint, map_location='cpu')
+    encode_fn = None
+    
+    if 'config' in checkpoint and 'dataset' in checkpoint['config']:
+        dataset = checkpoint['config']['dataset']
+        meta_path = os.path.join('data', dataset, 'meta.pkl')
+        if os.path.exists(meta_path):
+            with open(meta_path, 'rb') as f:
+                meta = pickle.load(f)
+            stoi = meta['stoi']
+            encode_fn = lambda s: [stoi[c] for c in s]
+            if master_process:
+                print(f"Loaded character-level encoder from {meta_path}")
+        else:
+            import tiktoken
+            enc = tiktoken.get_encoding("gpt2")
+            encode_fn = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
+            if master_process:
+                print("Using tiktoken GPT-2 BPE encoder")
+    else:
+        import tiktoken
+        enc = tiktoken.get_encoding("gpt2")
+        encode_fn = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
+        if master_process:
+            print("Using tiktoken GPT-2 BPE encoder (default)")
+    
     # Load datasets
     if master_process:
         print("\nLoading datasets...")
-    train_dataset = PreferenceDataset(args.train_data)
-    val_dataset = PreferenceDataset(args.val_data)
+    train_dataset = PreferenceDataset(args.train_data, encode_fn=encode_fn)
+    val_dataset = PreferenceDataset(args.val_data, encode_fn=encode_fn)
     
     # Create dataloaders
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if ddp else None
