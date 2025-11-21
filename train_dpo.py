@@ -75,20 +75,37 @@ def get_log_probs(model, tokens, prompt_len=None):
     Get log probabilities of tokens under the model.
     
     Args:
-        model: GPT model
+        model: GPT model (may be wrapped in DDP)
         tokens: Token IDs (batch_size, seq_len)
         prompt_len: Length of prompt (to only compute loss on completion)
     
     Returns:
         log_probs: Log probabilities (batch_size,)
     """
-    # Forward pass - need full logits, so pass targets to get all positions
-    # We'll ignore the loss
+    # Get the actual model (unwrap DDP if needed)
+    if hasattr(model, 'module'):
+        raw_model = model.module
+    else:
+        raw_model = model
+    
     input_tokens = tokens[:, :-1]  # All but last token
     target_tokens = tokens[:, 1:]   # All but first token (shifted)
     
-    # Get full logits by passing targets (model computes logits for all positions)
-    logits, _ = model(input_tokens, targets=target_tokens)
+    # Manually forward through model to get full logits without loss computation
+    device = input_tokens.device
+    b, t = input_tokens.size()
+    pos = torch.arange(0, t, dtype=torch.long, device=device)
+    
+    # Forward through transformer
+    tok_emb = raw_model.transformer.wte(input_tokens)
+    pos_emb = raw_model.transformer.wpe(pos)
+    x = raw_model.transformer.drop(tok_emb + pos_emb)
+    for block in raw_model.transformer.h:
+        x = block(x)
+    x = raw_model.transformer.ln_f(x)
+    
+    # Get logits for all positions
+    logits = raw_model.lm_head(x)  # (batch_size, seq_len, vocab_size)
     
     # Get log probs
     log_probs = F.log_softmax(logits, dim=-1)
