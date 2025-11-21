@@ -15,6 +15,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
 import numpy as np
 
 from reward_model import create_reward_model
@@ -232,52 +234,87 @@ def main():
     
     args = parser.parse_args()
     
-    # Create output directory
-    os.makedirs(args.out_dir, exist_ok=True)
+    # DDP setup
+    ddp = int(os.environ.get('RANK', -1)) != -1
+    if ddp:
+        init_process_group(backend='nccl')
+        ddp_rank = int(os.environ['RANK'])
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        args.device = f'cuda:{ddp_local_rank}'
+        torch.cuda.set_device(args.device)
+        master_process = ddp_rank == 0
+        assert args.batch_size % ddp_world_size == 0
+        args.batch_size //= ddp_world_size
+    else:
+        master_process = True
+        ddp_world_size = 1
     
-    print(f"{'='*60}")
-    print("Training Reward Model")
-    print(f"{'='*60}")
-    print(f"GPT checkpoint: {args.gpt_checkpoint}")
-    print(f"Train data: {args.train_data}")
-    print(f"Val data: {args.val_data}")
-    print(f"Output directory: {args.out_dir}")
-    print(f"Batch size: {args.batch_size}")
-    print(f"Block size: {args.block_size}")
-    print(f"Num epochs: {args.num_epochs}")
-    print(f"Learning rate: {args.learning_rate}")
-    print(f"Device: {args.device}")
-    print(f"{'='*60}\n")
+    # Create output directory (only on master)
+    if master_process:
+        os.makedirs(args.out_dir, exist_ok=True)
+    
+    if master_process:
+        print(f"{'='*60}")
+        print("Training Reward Model")
+        print(f"{'='*60}")
+        print(f"GPT checkpoint: {args.gpt_checkpoint}")
+        print(f"Train data: {args.train_data}")
+        print(f"Val data: {args.val_data}")
+        print(f"Output directory: {args.out_dir}")
+        print(f"Batch size per GPU: {args.batch_size}")
+        print(f"Total batch size: {args.batch_size * ddp_world_size}")
+        print(f"Block size: {args.block_size}")
+        print(f"Num epochs: {args.num_epochs}")
+        print(f"Learning rate: {args.learning_rate}")
+        print(f"Device: {args.device}")
+        print(f"DDP: {ddp}, World size: {ddp_world_size}")
+        print(f"{'='*60}\n")
     
     # Load reward model
-    print("Loading reward model...")
+    if master_process:
+        print("Loading reward model...")
     reward_model = create_reward_model(
         args.gpt_checkpoint,
         device=args.device,
         freeze_gpt=args.freeze_gpt
     )
     
+    # Wrap in DDP if multi-GPU
+    if ddp:
+        reward_model = DDP(reward_model, device_ids=[ddp_local_rank])
+        raw_model = reward_model.module
+    else:
+        raw_model = reward_model
+    
     # Load datasets
-    print("\nLoading datasets...")
+    if master_process:
+        print("\nLoading datasets...")
     train_dataset = PreferenceDataset(args.train_data)
     val_dataset = PreferenceDataset(args.val_data)
     
     # Create dataloaders
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if ddp else None
+    val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False) if ddp else None
+    
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         collate_fn=lambda b: collate_fn(b, args.block_size)
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
+        sampler=val_sampler,
         collate_fn=lambda b: collate_fn(b, args.block_size)
     )
     
-    print(f"Train batches: {len(train_loader)}")
-    print(f"Val batches: {len(val_loader)}")
+    if master_process:
+        print(f"Train batches: {len(train_loader)}")
+        print(f"Val batches: {len(val_loader)}")
     
     # Optimizer (only for reward head parameters)
     optimizer = torch.optim.AdamW(
@@ -304,13 +341,17 @@ def main():
         )
     
     # Training loop
-    print(f"\n{'='*60}")
-    print("Starting Training")
-    print(f"{'='*60}\n")
+    if master_process:
+        print(f"\n{'='*60}")
+        print("Starting Training")
+        print(f"{'='*60}\n")
     
     best_val_accuracy = 0
     
     for epoch in range(args.num_epochs):
+        if ddp:
+            train_sampler.set_epoch(epoch)
+        
         t0 = time.time()
         
         # Train
@@ -326,51 +367,56 @@ def main():
         t1 = time.time()
         dt = t1 - t0
         
-        print(f"Epoch {epoch+1}/{args.num_epochs} ({dt:.2f}s):")
-        print(f"  Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
-        print(f"  Val   - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
-        
-        # Log to wandb
-        if args.wandb_log:
-            wandb.log({
-                'epoch': epoch + 1,
-                'train/loss': train_loss,
-                'train/accuracy': train_acc,
-                'val/loss': val_loss,
-                'val/accuracy': val_acc,
-                'time_per_epoch': dt,
-            })
-        
-        # Save best model
-        if val_acc > best_val_accuracy:
-            best_val_accuracy = val_acc
-            checkpoint = {
-                'epoch': epoch,
-                'model_state_dict': reward_model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'train_acc': train_acc,
-                'val_acc': val_acc,
-                'args': vars(args)
-            }
-            torch.save(checkpoint, os.path.join(args.out_dir, 'best_model.pt'))
-            print(f"  → Saved best model (val_acc={val_acc:.4f})")
+        if master_process:
+            print(f"Epoch {epoch+1}/{args.num_epochs} ({dt:.2f}s):")
+            print(f"  Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}")
+            print(f"  Val   - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
             
+            # Log to wandb
             if args.wandb_log:
-                wandb.log({'best_val_accuracy': best_val_accuracy})
+                wandb.log({
+                    'epoch': epoch + 1,
+                    'train/loss': train_loss,
+                    'train/accuracy': train_acc,
+                    'val/loss': val_loss,
+                    'val/accuracy': val_acc,
+                    'time_per_epoch': dt,
+                })
+            
+            # Save best model
+            if val_acc > best_val_accuracy:
+                best_val_accuracy = val_acc
+                checkpoint = {
+                    'epoch': epoch,
+                    'model_state_dict': raw_model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'train_acc': train_acc,
+                    'val_acc': val_acc,
+                    'args': vars(args)
+                }
+                torch.save(checkpoint, os.path.join(args.out_dir, 'best_model.pt'))
+                print(f"  → Saved best model (val_acc={val_acc:.4f})")
+                
+                if args.wandb_log:
+                    wandb.log({'best_val_accuracy': best_val_accuracy})
+            
+            print()
+    
+    if master_process:
+        print(f"{'='*60}")
+        print("Training Complete!")
+        print(f"{'='*60}")
+        print(f"Best validation accuracy: {best_val_accuracy:.4f}")
+        print(f"Model saved to: {args.out_dir}/best_model.pt")
         
-        print()
+        if args.wandb_log:
+            wandb.log({'final/best_val_accuracy': best_val_accuracy})
+            wandb.finish()
     
-    print(f"{'='*60}")
-    print("Training Complete!")
-    print(f"{'='*60}")
-    print(f"Best validation accuracy: {best_val_accuracy:.4f}")
-    print(f"Model saved to: {args.out_dir}/best_model.pt")
-    
-    if args.wandb_log:
-        wandb.log({'final/best_val_accuracy': best_val_accuracy})
-        wandb.finish()
+    if ddp:
+        destroy_process_group()
 
 
 if __name__ == '__main__':

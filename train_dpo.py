@@ -17,6 +17,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
 import numpy as np
 
 from model import GPTConfig, GPT
@@ -299,14 +301,31 @@ def main():
     
     args = parser.parse_args()
     
-    os.makedirs(args.out_dir, exist_ok=True)
+    # DDP setup
+    ddp = int(os.environ.get('RANK', -1)) != -1
+    if ddp:
+        init_process_group(backend='nccl')
+        ddp_rank = int(os.environ['RANK'])
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        args.device = f'cuda:{ddp_local_rank}'
+        torch.cuda.set_device(args.device)
+        master_process = ddp_rank == 0
+        assert args.batch_size % ddp_world_size == 0
+        args.batch_size //= ddp_world_size
+    else:
+        master_process = True
+        ddp_world_size = 1
     
-    print(f"{'='*60}")
-    print("DPO Training")
-    print(f"{'='*60}\n")
+    if master_process:
+        os.makedirs(args.out_dir, exist_ok=True)
+        print(f"{'='*60}")
+        print("DPO Training")
+        print(f"{'='*60}\n")
     
     # Load reference model (frozen)
-    print("Loading reference model...")
+    if master_process:
+        print("Loading reference model...")
     checkpoint = torch.load(args.ref_checkpoint, map_location=args.device)
     gptconf = GPTConfig(**checkpoint['model_args'])
     ref_model = GPT(gptconf)
@@ -323,13 +342,15 @@ def main():
     for param in ref_model.parameters():
         param.requires_grad = False
     
-    print("✓ Reference model loaded (frozen)")
+    if master_process:
+        print("✓ Reference model loaded (frozen)")
     
     # Load/create policy model
     if args.init_checkpoint is None:
         args.init_checkpoint = args.ref_checkpoint
     
-    print(f"Loading policy model from {args.init_checkpoint}...")
+    if master_process:
+        print(f"Loading policy model from {args.init_checkpoint}...")
     checkpoint = torch.load(args.init_checkpoint, map_location=args.device)
     policy_model = GPT(gptconf)
     
@@ -340,7 +361,15 @@ def main():
     policy_model.load_state_dict(state_dict)
     policy_model.to(args.device)
     
-    print("✓ Policy model loaded")
+    # Wrap policy model in DDP
+    if ddp:
+        policy_model = DDP(policy_model, device_ids=[ddp_local_rank])
+        raw_policy_model = policy_model.module
+    else:
+        raw_policy_model = policy_model
+    
+    if master_process:
+        print("✓ Policy model loaded")
     
     # Get encoder function
     if 'config' in checkpoint and 'dataset' in checkpoint['config']:
@@ -374,44 +403,59 @@ def main():
     train_dataset = PreferenceDataset(train_dpo_path)
     val_dataset = PreferenceDataset(val_dpo_path)
     
+    # Create distributed samplers
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if ddp else None
+    val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False) if ddp else None
+    
     train_loader = DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        sampler=train_sampler,
         collate_fn=lambda b: collate_fn(b, args.block_size)
     )
     val_loader = DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False,
+        sampler=val_sampler,
         collate_fn=lambda b: collate_fn(b, args.block_size)
     )
     
     # Optimizer
     optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.learning_rate)
     
-    # Initialize wandb
-    if args.wandb_log:
+    # Initialize wandb (only on master)
+    if args.wandb_log and master_process:
         import wandb
         wandb.init(
             project=args.wandb_project,
             name=args.wandb_run_name or f"dpo-{int(time.time())}",
             config={
                 'ref_checkpoint': args.ref_checkpoint,
-                'batch_size': args.batch_size,
+                'batch_size_per_gpu': args.batch_size,
+                'total_batch_size': args.batch_size * ddp_world_size,
                 'block_size': args.block_size,
                 'num_epochs': args.num_epochs,
                 'learning_rate': args.learning_rate,
                 'beta': args.beta,
+                'ddp_world_size': ddp_world_size,
                 'train_samples': len(train_dataset),
                 'val_samples': len(val_dataset),
             }
         )
     
-    print(f"\nStarting DPO training...")
-    print(f"Beta: {args.beta}")
-    print(f"Learning rate: {args.learning_rate}")
-    print(f"Epochs: {args.num_epochs}\n")
+    if master_process:
+        print(f"\nStarting DPO training...")
+        print(f"Beta: {args.beta}")
+        print(f"Learning rate: {args.learning_rate}")
+        print(f"Batch size per GPU: {args.batch_size}")
+        print(f"Total batch size: {args.batch_size * ddp_world_size}")
+        print(f"Epochs: {args.num_epochs}")
+        print(f"DDP: {ddp}, World size: {ddp_world_size}\n")
     
     best_val_acc = 0
     
     for epoch in range(args.num_epochs):
+        if ddp:
+            train_sampler.set_epoch(epoch)
+        
         t0 = time.time()
         
         train_loss, train_acc, train_rw_w, train_rw_l = train_epoch(
@@ -424,48 +468,53 @@ def main():
         
         t1 = time.time()
         
-        print(f"Epoch {epoch+1}/{args.num_epochs} ({t1-t0:.2f}s):")
-        print(f"  Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, R_w: {train_rw_w:.4f}, R_l: {train_rw_l:.4f}")
-        print(f"  Val   - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, R_w: {val_rw_w:.4f}, R_l: {val_rw_l:.4f}")
+        if master_process:
+            print(f"Epoch {epoch+1}/{args.num_epochs} ({t1-t0:.2f}s):")
+            print(f"  Train - Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, R_w: {train_rw_w:.4f}, R_l: {train_rw_l:.4f}")
+            print(f"  Val   - Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, R_w: {val_rw_w:.4f}, R_l: {val_rw_l:.4f}")
+            
+            # Log to wandb
+            if args.wandb_log:
+                wandb.log({
+                    'epoch': epoch + 1,
+                    'train/loss': train_loss,
+                    'train/accuracy': train_acc,
+                    'train/reward_winner': train_rw_w,
+                    'train/reward_loser': train_rw_l,
+                    'val/loss': val_loss,
+                    'val/accuracy': val_acc,
+                    'val/reward_winner': val_rw_w,
+                    'val/reward_loser': val_rw_l,
+                    'time_per_epoch': t1 - t0,
+                })
+            
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                checkpoint = {
+                    'model': raw_policy_model.state_dict(),
+                    'model_args': vars(gptconf),
+                    'optimizer': optimizer.state_dict(),
+                    'epoch': epoch,
+                    'val_acc': val_acc,
+                    'args': vars(args)
+                }
+                torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
+                print(f"  → Saved best model")
+            print()
+    
+    if master_process:
+        print(f"{'='*60}")
+        print("DPO Training Complete!")
+        print(f"{'='*60}")
+        print(f"Best val accuracy: {best_val_acc:.4f}")
+        print(f"Model saved to: {args.out_dir}/ckpt.pt")
         
-        # Log to wandb
         if args.wandb_log:
-            wandb.log({
-                'epoch': epoch + 1,
-                'train/loss': train_loss,
-                'train/accuracy': train_acc,
-                'train/reward_winner': train_rw_w,
-                'train/reward_loser': train_rw_l,
-                'val/loss': val_loss,
-                'val/accuracy': val_acc,
-                'val/reward_winner': val_rw_w,
-                'val/reward_loser': val_rw_l,
-                'time_per_epoch': t1 - t0,
-            })
-        
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            checkpoint = {
-                'model': policy_model.state_dict(),
-                'model_args': vars(gptconf),
-                'optimizer': optimizer.state_dict(),
-                'epoch': epoch,
-                'val_acc': val_acc,
-                'args': vars(args)
-            }
-            torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
-            print(f"  → Saved best model")
-        print()
+            wandb.log({'final/best_val_accuracy': best_val_acc})
+            wandb.finish()
     
-    print(f"{'='*60}")
-    print("DPO Training Complete!")
-    print(f"{'='*60}")
-    print(f"Best val accuracy: {best_val_acc:.4f}")
-    print(f"Model saved to: {args.out_dir}/ckpt.pt")
-    
-    if args.wandb_log:
-        wandb.log({'final/best_val_accuracy': best_val_acc})
-        wandb.finish()
+    if ddp:
+        destroy_process_group()
 
 
 if __name__ == '__main__':
