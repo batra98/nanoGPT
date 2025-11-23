@@ -120,7 +120,7 @@ def sample_completions(model, prompts, max_new_tokens=200, temperature=0.8, top_
     Sample completions from model.
     
     Args:
-        model: GPT model
+        model: GPT model (may be wrapped in DDP)
         prompts: Prompt tensors (batch_size, prompt_len)
         max_new_tokens: Max tokens to generate
         temperature: Sampling temperature
@@ -131,7 +131,13 @@ def sample_completions(model, prompts, max_new_tokens=200, temperature=0.8, top_
         completions: List of completion tensors
         prompt_lens: Prompt lengths
     """
-    model.eval()
+    # Get the actual model (unwrap DDP if needed)
+    if hasattr(model, 'module'):
+        raw_model = model.module
+    else:
+        raw_model = model
+    
+    raw_model.eval()
     completions = []
     prompt_lens = []
     
@@ -144,7 +150,7 @@ def sample_completions(model, prompts, max_new_tokens=200, temperature=0.8, top_
             prompt_expanded = prompt.unsqueeze(0).repeat(num_samples_per_prompt, 1)
             
             # Generate
-            completion = model.generate(
+            completion = raw_model.generate(
                 prompt_expanded,
                 max_new_tokens,
                 temperature=temperature,
