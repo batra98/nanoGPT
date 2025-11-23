@@ -131,8 +131,8 @@ def main():
     parser = argparse.ArgumentParser(description='Evaluate GRPO model')
     parser.add_argument('--base_checkpoint', type=str, default='out-shakespeare/ckpt.pt',
                        help='Base model checkpoint')
-    parser.add_argument('--grpo_checkpoint', type=str, default='out-grpo/ckpt.pt',
-                       help='GRPO model checkpoint')
+    parser.add_argument('--grpo_checkpoint', type=str, default=None,
+                       help='GRPO model checkpoint (default: tries best_ckpt.pt, then ckpt.pt)')
     parser.add_argument('--prompts_path', type=str, default='data/grpo/prompts.pkl',
                        help='Path to prompts')
     parser.add_argument('--num_samples', type=int, default=100,
@@ -173,8 +173,21 @@ def main():
     base_encode, base_decode = get_encoder_decoder(args.base_checkpoint)
     print(f"✓ Base model loaded\n")
     
-    # Load GRPO model
-    print("Loading GRPO model...")
+    # Load GRPO model (try best checkpoint first)
+    if args.grpo_checkpoint is None:
+        grpo_dir = 'out-grpo'
+        best_ckpt = os.path.join(grpo_dir, 'best_ckpt.pt')
+        final_ckpt = os.path.join(grpo_dir, 'ckpt.pt')
+        if os.path.exists(best_ckpt):
+            args.grpo_checkpoint = best_ckpt
+            print(f"Using best checkpoint: {best_ckpt}")
+        elif os.path.exists(final_ckpt):
+            args.grpo_checkpoint = final_ckpt
+            print(f"Using final checkpoint: {final_ckpt}")
+        else:
+            raise FileNotFoundError(f"No checkpoint found in {grpo_dir}")
+    
+    print(f"Loading GRPO model from {args.grpo_checkpoint}...")
     grpo_model = load_model(args.grpo_checkpoint, args.device)
     grpo_encode, grpo_decode = get_encoder_decoder(args.grpo_checkpoint)
     print(f"✓ GRPO model loaded\n")
