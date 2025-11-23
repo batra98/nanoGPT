@@ -284,8 +284,8 @@ def main():
                        help='Evaluation interval')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device')
-    parser.add_argument('--wandb_log', action='store_true', default=False,
-                       help='Enable wandb logging')
+    parser.add_argument('--wandb_log', action='store_true', default=True,
+                       help='Enable wandb logging (default: True)')
     parser.add_argument('--wandb_project', type=str, default='grpo-rlvr',
                        help='Wandb project name')
     parser.add_argument('--wandb_run_name', type=str, default=None,
