@@ -162,28 +162,32 @@ def sample_completions(model, prompts, max_new_tokens=200, temperature=0.8, top_
     return completions, prompt_lens
 
 
-def compute_grpo_loss(policy_log_probs, ref_log_probs, rewards, beta=0.1):
+def compute_grpo_loss(policy_log_probs, ref_log_probs, rewards, beta=0.1, max_importance_weight=10.0):
     """
-    Compute GRPO loss with importance sampling.
+    Compute GRPO loss with importance sampling and clipping.
     
     Loss = -E[r * w] + β * KL(π_θ || π_ref)
-    where w = π_θ(y|x) / π_ref(y|x) is the importance weight
+    where w = π_θ(y|x) / π_ref(y|x) is the importance weight (clipped)
     
     Args:
         policy_log_probs: Log probs under policy (batch_size,)
         ref_log_probs: Log probs under reference (batch_size,)
         rewards: Verifier rewards (batch_size,)
         beta: KL penalty weight
+        max_importance_weight: Maximum importance weight (clipping)
     
     Returns:
         loss: Scalar loss
         mean_reward: Mean reward
-        mean_importance_weight: Mean importance weight
+        mean_importance_weight: Mean importance weight (after clipping)
         kl_divergence: KL divergence
     """
     # Importance weights: w = exp(log π_θ - log π_ref) = π_θ / π_ref
     log_importance_weights = policy_log_probs - ref_log_probs
     importance_weights = torch.exp(log_importance_weights)
+    
+    # Clip importance weights to prevent explosion
+    importance_weights = torch.clamp(importance_weights, max=max_importance_weight)
     
     # Weighted reward: r * w
     weighted_rewards = rewards * importance_weights
@@ -201,7 +205,7 @@ def compute_grpo_loss(policy_log_probs, ref_log_probs, rewards, beta=0.1):
 
 
 def train_step(policy_model, ref_model, prompts, encode, decode, device, max_new_tokens=200, 
-               temperature=0.8, top_k=200, num_samples_per_prompt=4, beta=0.1, block_size=256):
+               temperature=0.8, top_k=200, num_samples_per_prompt=4, beta=0.1, max_importance_weight=10.0, block_size=256):
     """Single training step."""
     policy_model.train()
     ref_model.eval()
@@ -252,7 +256,7 @@ def train_step(policy_model, ref_model, prompts, encode, decode, device, max_new
     
     # Compute GRPO loss
     loss, mean_weighted_reward, mean_importance_weight, kl_div = compute_grpo_loss(
-        policy_log_probs, ref_log_probs, rewards, beta
+        policy_log_probs, ref_log_probs, rewards, beta, max_importance_weight
     )
     
     return loss, mean_weighted_reward.item(), mean_importance_weight.item(), kl_div.item(), rewards.mean().item()
@@ -286,6 +290,8 @@ def main():
                        help='Learning rate')
     parser.add_argument('--beta', type=float, default=0.1,
                        help='KL penalty weight')
+    parser.add_argument('--max_importance_weight', type=float, default=10.0,
+                       help='Maximum importance weight (clipping)')
     parser.add_argument('--eval_interval', type=int, default=100,
                        help='Evaluation interval')
     parser.add_argument('--device', type=str, default='cuda',
@@ -467,7 +473,7 @@ def main():
         result = train_step(
             policy_model, ref_model, prompts, encode, decode, args.device,
             args.max_new_tokens, args.temperature, args.top_k,
-            args.num_samples_per_prompt, args.beta, args.block_size
+            args.num_samples_per_prompt, args.beta, args.max_importance_weight, args.block_size
         )
         
         if result is None:
@@ -521,8 +527,20 @@ def main():
                         'mean_reward': avg_reward,
                         'args': vars(args)
                     }
-                    torch.save(checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
+                    # Save best checkpoint separately
+                    torch.save(checkpoint, os.path.join(args.out_dir, 'best_ckpt.pt'))
                     print(f"  → Saved best model (mean_reward={avg_reward:.2f})")
+                
+                # Always save final checkpoint
+                final_checkpoint = {
+                    'model': raw_policy_model.state_dict(),
+                    'model_args': vars(gptconf),
+                    'optimizer': optimizer.state_dict(),
+                    'step': step,
+                    'mean_reward': avg_reward,
+                    'args': vars(args)
+                }
+                torch.save(final_checkpoint, os.path.join(args.out_dir, 'ckpt.pt'))
                 
                 if args.wandb_log:
                     wandb.log({
@@ -538,7 +556,8 @@ def main():
         print("GRPO Training Complete!")
         print(f"{'='*60}")
         print(f"Best mean reward: {best_mean_reward:.2f}")
-        print(f"Model saved to: {args.out_dir}/ckpt.pt")
+        print(f"Best model saved to: {args.out_dir}/best_ckpt.pt")
+        print(f"Final model saved to: {args.out_dir}/ckpt.pt")
         
         # Save reward history
         reward_history_path = os.path.join(args.out_dir, 'reward_history.pkl')
