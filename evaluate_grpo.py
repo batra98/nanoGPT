@@ -19,7 +19,7 @@ from verifier import compute_verifier_score, compute_verifier_scores, report_ver
 
 def get_encoder_decoder(checkpoint_path: str):
     """Get encode/decode functions from checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     if 'config' in checkpoint and 'dataset' in checkpoint['config']:
         dataset = checkpoint['config']['dataset']
@@ -42,7 +42,7 @@ def get_encoder_decoder(checkpoint_path: str):
 
 def load_model(checkpoint_path: str, device: str = 'cuda'):
     """Load model from checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     gptconf = GPTConfig(**checkpoint['model_args'])
     model = GPT(gptconf)
     
